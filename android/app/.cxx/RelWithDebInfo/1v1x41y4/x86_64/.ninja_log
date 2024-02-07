@@ -1,0 +1,5 @@
+# ninja log v5
+1	342	1706768719610701825	CMakeFiles/wandview.dir/wandview.cpp.o	8886b90c59b8d0ef
+342	400	1706768719659697642	/Users/rami/StudioProjects/WandView/build/app/intermediates/cxx/RelWithDebInfo/1v1x41y4/obj/x86_64/libwandview.so	84dbdafbd709e19f
+1	448	1706794090175522014	CMakeFiles/wandview.dir/wandview.cpp.o	8886b90c59b8d0ef
+448	518	1706794090238887876	/Users/rami/StudioProjects/WandView/build/app/intermediates/cxx/RelWithDebInfo/1v1x41y4/obj/x86_64/libwandview.so	84dbdafbd709e19f

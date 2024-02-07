@@ -1,0 +1,9 @@
+# ninja log v5
+0	521	1706768307760915184	CMakeFiles/wandview.dir/wandview.cpp.o	8c46ec1d79085891
+522	710	1706768307934739610	/Users/rami/StudioProjects/WandView/build/app/intermediates/cxx/Debug/2k21661f/obj/arm64-v8a/libwandview.so	275b10da74ac4fd7
+1	598	1706770662202634469	CMakeFiles/wandview.dir/wandview.cpp.o	8c46ec1d79085891
+598	939	1706770662529834394	/Users/rami/StudioProjects/WandView/build/app/intermediates/cxx/Debug/2k21661f/obj/arm64-v8a/libwandview.so	275b10da74ac4fd7
+1	1128	1706774477275678958	CMakeFiles/wandview.dir/wandview.cpp.o	8c46ec1d79085891
+1128	1398	1706774477532030407	/Users/rami/StudioProjects/WandView/build/app/intermediates/cxx/Debug/2k21661f/obj/arm64-v8a/libwandview.so	275b10da74ac4fd7
+1	625	1706775548110402520	CMakeFiles/wandview.dir/wandview.cpp.o	8c46ec1d79085891
+625	910	1706775548381066976	/Users/rami/StudioProjects/WandView/build/app/intermediates/cxx/Debug/2k21661f/obj/arm64-v8a/libwandview.so	275b10da74ac4fd7

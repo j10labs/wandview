@@ -1,0 +1,7 @@
+# ninja log v5
+0	337	1706851426294792129	CMakeFiles/wandview.dir/wandview.cpp.o	10146f1c13810a3c
+338	401	1706851426352394161	/Users/rami/StudioProjects/WandView/build/app/intermediates/cxx/Debug/4x6d683x/obj/armeabi-v7a/libwandview.so	9cb7fe13523b103d
+0	11	0	clean	6f971a39f610cd9d
+0	8	0	clean	6f971a39f610cd9d
+0	4815	1706854687886105529	CMakeFiles/wandview.dir/wandview.cpp.o	10146f1c13810a3c
+4815	5958	1706854688947105898	/Users/rami/StudioProjects/WandView/build/app/intermediates/cxx/Debug/4x6d683x/obj/armeabi-v7a/libwandview.so	9cb7fe13523b103d

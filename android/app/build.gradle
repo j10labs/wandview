@@ -2,7 +2,9 @@ plugins {
     id "com.android.application"
     id "kotlin-android"
     id "dev.flutter.flutter-gradle-plugin"
+    id 'com.google.gms.google-services'
 }
+
 
 def localProperties = new Properties()
 def localPropertiesFile = rootProject.file('local.properties')
@@ -45,10 +47,15 @@ android {
         applicationId "com.read21.wandview.wandview"
         // You can update the following values to match your application needs.
         // For more information, see: https://docs.flutter.dev/deployment/android#reviewing-the-gradle-build-configuration.
-        minSdkVersion flutter.minSdkVersion
+        minSdkVersion 21
         targetSdkVersion flutter.targetSdkVersion
         versionCode flutterVersionCode.toInteger()
         versionName flutterVersionName
+//        externalNativeBuild {
+//            cmake {
+//                cppFlags ''
+//            }
+//        }
     }
 
     buildTypes {
@@ -58,10 +65,17 @@ android {
             signingConfig signingConfigs.debug
         }
     }
+//    externalNativeBuild {
+//        cmake {
+//            path file('src/main/cpp/CMakeLists.txt')
+//            version '3.22.1'
+//        }
+//    }
 }
 
 flutter {
     source '../..'
 }
 
-dependencies {}
+dependencies {
+}

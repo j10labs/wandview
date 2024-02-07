@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "891938767923",
+    "project_id": "wandview",
+    "storage_bucket": "wandview.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:891938767923:android:725090119879d1776d8f46",
+        "android_client_info": {
+          "package_name": "com.read21.wandview.wandview"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDPPDrh4mBVkyuMrp341DzhPXpR88v_aXI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

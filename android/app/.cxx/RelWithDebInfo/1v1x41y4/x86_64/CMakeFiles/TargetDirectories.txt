@@ -1,0 +1,3 @@
+/Users/rami/StudioProjects/WandView/android/app/.cxx/RelWithDebInfo/1v1x41y4/x86_64/CMakeFiles/wandview.dir
+/Users/rami/StudioProjects/WandView/android/app/.cxx/RelWithDebInfo/1v1x41y4/x86_64/CMakeFiles/edit_cache.dir
+/Users/rami/StudioProjects/WandView/android/app/.cxx/RelWithDebInfo/1v1x41y4/x86_64/CMakeFiles/rebuild_cache.dir

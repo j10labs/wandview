@@ -1,9 +1,11 @@
 import 'dart:convert';
 import 'dart:ffi';
 
+import 'package:flutter/foundation.dart';
 import 'package:get/get.dart';
 import 'package:graphql/client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:wandview/utils/utilities.dart';
 class AuthObject {
   final String host;
   final String apiKey;
@@ -25,8 +27,10 @@ class AppController extends GetxController {
   final isAuthenticating = false.obs;
   final authError = "".obs;
   final selectedProject = "all".obs;
-  final runHistory = [].obs;
-  final systemMetrics = [].obs;
+  final runHistory = <Map<String,dynamic>>[].obs;
+  final systemMetrics = <Map<String,dynamic>>[].obs;
+  final tRunHistory =  <Map<String,dynamic>>[].obs;
+  final tSystemMetrics =  <Map<String,dynamic>>[].obs;
   final chartInfo = {}.obs;
   late SharedPreferences prefs;
   late GraphQLClient client;
@@ -70,13 +74,15 @@ class AppController extends GetxController {
       authError.value = "Invalid host or API key";
       return "login";
     }
-    if (!GetUtils.isURL("https://"+authObject.value!.host)) {
-        authError.value = "Host must be a domain name";
-        return "login";
+    var authObjectHost = authObject.value!.host;
+    if (!GetUtils.isURL("https://"+authObjectHost)) {
+
+      authObjectHost = "api.wandb.ai";
     }
     isAuthenticating.value=true;
+
     final _httpLink = HttpLink(
-      "https://"+authObject.value!.host+"/graphql",
+      "https://"+authObjectHost+"/graphql",
     );
     var unameAndPass = ["api", authObject.value!.apiKey];
     var generatedToken ="Basic ${base64Encode(utf8.encode(unameAndPass.join(':')))}";
@@ -128,9 +134,13 @@ class AppController extends GetxController {
         result.data?["viewer"]["email"],
         result.data?["viewer"]["photoUrl"]);
     print(result.data);
+    projects.value=[];
 
+    runHistory.value = [];
+    systemMetrics.value = [];
     await loadRunsAndProjects();
     isAuthenticating.value=false;
+
     Get.offAndToNamed("/selector");
 
     // await Future.delayed(Duration(seconds: 4));
@@ -139,15 +149,84 @@ class AppController extends GetxController {
   }
   clearHistory(){
     runHistory.value=[];
+    systemMetrics.value=[];
   }
-  loadHistory(runId, projectName, entityName)async{
+
+  compareSimiliarity(List<Map<String, dynamic>> a, List<Map<String, dynamic>> b){
+    // return false;
+    var lastA = a.lastOrNull;
+    var lastB = b.lastOrNull;
+    if(lastA == null || lastB == null) return false;
+    if(lastA.keys.length != lastB.keys.length) return false;
+    if (a.length != b.length) return false;
+    for(var key in lastB.keys){
+      var lastAComp = lastA["l__"+key] ?? lastA[key];
+      if(lastAComp != lastB[key]) return false;
+    }
+    return true;
+  }
+
+  void refreshLastSeen(runId, List<Map<String,dynamic>> finalRunHistory){
+    double? lastLoadedStep =  (finalRunHistory.map((e)=>e["_step"] ?? e["_runtime"])).lastOrNull;
+    var appSessionId = prefs.getString("appSession")!;
+
+    var storedLastSeenStep = prefs.getDouble("$runId:lastSeenStep");
+    var sessionLastSeenStep =  prefs.getDouble("$appSessionId:$runId:lastSeenStep");
+    double? absoluteLastSeenStep;
+    if (storedLastSeenStep != null){
+      absoluteLastSeenStep = storedLastSeenStep;
+    }else if(lastLoadedStep != null){
+      absoluteLastSeenStep = lastLoadedStep;
+    }
+    if(lastLoadedStep != null ){
+      prefs.setDouble("$runId:lastSeenStep", lastLoadedStep);
+    }
+
+    if(sessionLastSeenStep == null && absoluteLastSeenStep!= null && (lastLoadedStep != storedLastSeenStep)){
+      prefs.setDouble("$appSessionId:$runId:lastSeenStep", absoluteLastSeenStep);
+    }
+  }
+
+  loadHistory(runId, projectName, entityName, {onProject=false, allowCache=false, List<Map<String,dynamic>>? previousMetrics=null, List<Map<String,dynamic>>? previousSystemMetrics=null})async{
+    if(chartInfo.isEmpty){
+      await loadCharts();
+    }
+    var finalRunHistory = (onProject)? (previousMetrics ?? []) :  runHistory.value;
+    var finalSystemMetrics = (onProject)? (previousSystemMetrics ?? []) :  systemMetrics.value;
+    var cacheData= false;
+    if(allowCache && (finalRunHistory.isEmpty)){
+      var cachedComputedHistory = prefs.getString(runId+"history");
+      if (cachedComputedHistory != null){
+        List<Map<String,dynamic>> cachedHistory = jsonDecode(cachedComputedHistory).map<Map<String,dynamic>>((e)=>e as Map<String,dynamic>).toList();
+        finalRunHistory = cachedHistory;
+        cacheData = true;
+      }
+      var cachedComputedSystemMetrics = prefs.getString(runId+"systemMetrics");
+      if (cachedComputedSystemMetrics != null){
+        List<Map<String,dynamic>> cachedSystemMetrics = jsonDecode(cachedComputedSystemMetrics).map<Map<String,dynamic>>((e)=>e as Map<String,dynamic>).toList();
+        finalSystemMetrics = cachedSystemMetrics;
+        cacheData = true;
+      }
+    }
+
+
+
+
+    if(cacheData && (finalRunHistory.isNotEmpty)){
+      if(onProject){
+        return (finalRunHistory, finalSystemMetrics, true);
+      }
+      runHistory.value =finalRunHistory;
+      systemMetrics.value = finalSystemMetrics;
+    }
+
     final QueryOptions options = QueryOptions(
       document: gql(r'''
        query ($runId: String!, $projectName: String!, $entityName: String!) {
          
          project (name:$projectName, entityName: $entityName ){
          run(name: $runId) {
-         history
+         history (maxStep: 10000000,minStep: 0)
          events
          systemMetrics 
          summaryMetrics
@@ -166,64 +245,79 @@ class AppController extends GetxController {
         "runId": runId,
         "projectName": projectName,
         "entityName": entityName
-      }
+      },
+      fetchPolicy: allowCache ?FetchPolicy.cacheFirst : FetchPolicy.networkOnly,
+      pollInterval: Duration(seconds: 2),
+      cacheRereadPolicy: allowCache ? CacheRereadPolicy.mergeOptimistic : CacheRereadPolicy.ignoreAll
     );
 
 
+
+
     final QueryResult result = await client.query(options);
+
     result.parserFn = (response) {
       //parse it to projects and runs, and interlock them
       var history = response["project"]["run"]["history"] as List;
       var events = response["project"]["run"]["events"] as List;
 
-      return [history.map((e) {
-        return jsonDecode(e);
-      }).toList(), events.map((e) {
-        return jsonDecode(e);
+
+      return [history.map<Map<String,dynamic>>((e) {
+        return jsonDecode(e) as Map<String,dynamic>;
+      }).toList(), events.map<Map<String,dynamic>>((e) {
+        return jsonDecode(e) as Map<String,dynamic>;
       }).toList()];
     };
-    var [queriedHistory, queriedSystemMetrics] = result.parsedData as List<dynamic>;
+    if(result.hasException){
+      print("Something went wrong!");
+      print(result.exception);
+      return;
+    }
+    var [List<Map<String,dynamic>> queriedHistory, List<Map<String,dynamic>> queriedSystemMetrics] = result.parsedData as List<dynamic>;
+
+
     //check if runHistory is the same as queriedHistory
-    if (runHistory.value.length == queriedHistory.length) {
-      var same = true;
-      for (var i = 0; i < runHistory.value.length; i++) {
-        //match each item, each key
-        var item = runHistory.value[i];
-        var queriedItem = queriedHistory[i];
-        for (var key in item.keys) {
-          if (item[key] != queriedItem[key]) {
-            same = false;
-            break;
-          }
-        }
+
+
+
+    var runHistoryIsSimiliar = compareSimiliarity(finalRunHistory, queriedHistory);
+    var systemMetricsIsSimiliar = compareSimiliarity(finalSystemMetrics, queriedSystemMetrics);
+
+
+
+
+    if (!runHistoryIsSimiliar) {
+      var formattedHistory =(await compute(isolatedRun,queriedHistory)) as List<Map<String,dynamic>>;
+
+      prefs.setString(runId+"history", jsonEncode(formattedHistory));
+      finalRunHistory = formattedHistory;
+
+    }
+    if (!systemMetricsIsSimiliar) {
+      var formattedSystemMetrics = (await compute(isolatedRun,queriedSystemMetrics)) as List<Map<String,dynamic>>;
+
+      prefs.setString(runId+"systemMetrics", jsonEncode(formattedSystemMetrics));
+      finalSystemMetrics = formattedSystemMetrics ;
+      if(!onProject){
+        systemMetrics.value = finalSystemMetrics;
       }
-      if (!same) {
-        runHistory.value = queriedHistory ;
-      }
-    } else {
-      runHistory.value = queriedHistory ;
     }
 
-    if (systemMetrics.value.length == queriedSystemMetrics.length) {
-      var same = true;
-      for (var i = 0; i < systemMetrics.value.length; i++) {
-        //match each item, each key
-        var item = systemMetrics.value[i];
-        var queriedItem = queriedSystemMetrics[i];
-        for (var key in item.keys) {
-          if (item[key] != queriedItem[key]) {
-            same = false;
-            break;
-          }
-        }
-      }
-      if (!same) {
-        systemMetrics.value = queriedSystemMetrics ;
-      }
-    } else {
-      systemMetrics.value = queriedSystemMetrics ;
+    if(!runHistoryIsSimiliar || allowCache){
+      refreshLastSeen(runId, finalRunHistory);
     }
 
+
+    if(onProject){
+      return (finalRunHistory, finalSystemMetrics, !runHistoryIsSimiliar || !systemMetricsIsSimiliar);
+    }else{
+      if(!runHistoryIsSimiliar){
+        runHistory.value = finalRunHistory;
+      }
+      if (!systemMetricsIsSimiliar){
+        systemMetrics.value = finalSystemMetrics;
+      }
+    }
 
 
   }
@@ -321,9 +415,10 @@ class AppController extends GetxController {
   }
 
   loadRunsAndProjects() async {
+
     final QueryOptions options = QueryOptions(
       document: gql(r'''
-       query {
+       query{
        viewer{
        
          projects (order: "-createdAt") {
@@ -358,11 +453,12 @@ createdAt
                   projectId
                   
                   project {
-                  name
-                  id
-                  entityName
+                    name
+                    id
+                    entityName
                   }
                   name
+                  historyLineCount
                   displayName
                   sweepName
                   
@@ -375,7 +471,7 @@ createdAt
        }
           
        }      
-    '''),
+    ''')
     );
     final QueryResult result = await client.query(options);
     result.parserFn = (response) {
@@ -424,20 +520,20 @@ createdAt
     await loadCharts();
   }
 
+
+
   void selectProject (projectId){
     selectedProject.value=projectId;
   }
 
   void hostChange (String host){
-    if(authObject.value==null) {
-      authObject.value=AuthObject(host, "", false);
-    }
+    authObject.value ??= AuthObject(host, "", false);
     authObject.value=AuthObject(host,
         authObject.value!.apiKey, false);
   }
   void apiKeyChange (String apiKey){
     if(authObject.value==null) {
-      authObject.value=AuthObject("", apiKey, false);
+      authObject.value=AuthObject("api.wandb.ai", apiKey, false);
     }
     authObject.value=AuthObject(authObject.value!.host,
         apiKey, false);
@@ -447,9 +543,7 @@ createdAt
     prefs.remove("authObject");
     authObject.value= null;
     userProfile.value=null;
-    projects.value=[];
-    await Get.offAndToNamed("/login");
-
+     Get.offAndToNamed("/login");
 
   }
 

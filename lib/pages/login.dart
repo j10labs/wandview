@@ -17,7 +17,6 @@ class AuthPage extends StatelessWidget {
     // TODO: implement build
     return Scaffold(
       body:  Obx(()=>Container(
-        color: Color.fromARGB(250, 3, 54, 183),
         alignment: Alignment.center,
         padding: EdgeInsets.symmetric(vertical:20, horizontal: 30),
         child: Stack(
@@ -42,41 +41,57 @@ class AuthPage extends StatelessWidget {
 
                     children: [
                       Container(
-                        child:   TextField(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(10),
+                          color:  appController.isAuthenticating.value ? Colors.grey.shade300 : Colors.white,
+                        ),
+                        padding: EdgeInsets.symmetric(horizontal: 15, vertical: 10),
+                        child:   TextFormField(
                           onChanged: (value){
                             appController.hostChange(value);
                           },
+                          initialValue: "api.wandb.ai",
+                          autofillHints: ["api.wandb.ai"],
+                          enableSuggestions: true,
+                          textCapitalization: TextCapitalization.none,
                           decoration: InputDecoration.collapsed(
-                            hintText: 'Host (Domain name)',
+                            hintText: 'api.wandb.ai',
                             fillColor:  appController.isAuthenticating.value ? Colors.grey.shade300 : Colors.white,
-                            filled: true,
 
+                            filled: true,
 
                           ),
                           readOnly: appController.isAuthenticating.value,
                           style: TextStyle(
 
                             fontSize: 23,
+                            color: Colors.grey.shade900
 
 
                           ),
 
+
                         ),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(10),
-                          color:  appController.isAuthenticating.value ? Colors.grey.shade300 : Colors.white,
-                        ),
-                        padding: EdgeInsets.symmetric(horizontal: 15, vertical: 10),
 
                       ),
                       SizedBox(height: 30,),
                       Container(
+                        decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(10),
+                            color: appController.isAuthenticating.value ? Colors.grey.shade300 : Colors.white
+                        ),
+                        padding: EdgeInsets.symmetric(horizontal: 15, vertical: 10),
                         child:   TextField(
                           onChanged: (value){
                             appController.apiKeyChange(value);
                           },
+                          enableSuggestions: true,
+                          textCapitalization: TextCapitalization.none,
                           decoration: InputDecoration.collapsed(
                             hintText: 'API Key',
+                            hintStyle: TextStyle(
+                              color: Colors.grey.shade400,
+                            ),
                             fillColor: appController.isAuthenticating.value ? Colors.grey.shade300 : Colors.white,
                             filled: true,
 
@@ -85,17 +100,12 @@ class AuthPage extends StatelessWidget {
                           style: TextStyle(
 
                             fontSize: 23,
-
+                              color: Colors.grey.shade900
 
                           ),
                           readOnly: appController.isAuthenticating.value,
 
                         ),
-                        decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(10),
-                            color: appController.isAuthenticating.value ? Colors.grey.shade300 : Colors.white
-                        ),
-                        padding: EdgeInsets.symmetric(horizontal: 15, vertical: 10),
 
                       ),
 
@@ -103,25 +113,37 @@ class AuthPage extends StatelessWidget {
 
 
                   ),),
+                  SizedBox(height: 20,),
+                  Container(
+                    child: Text("* Authentiation and data is only sent to your wandb server", style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey.shade300,
+                    ),),
+                    alignment: Alignment.bottomLeft,
+                  ),
                   SizedBox(height: 40,),
-                  GestureDetector(
-                    onTap: (){
+
+                  ElevatedButton(
+                    // decoration: BoxDecoration(
+                    //     borderRadius: BorderRadius.circular(10),
+                    //     color: appController.isAuthenticating.value ? Colors.grey.shade300 : Colors.white
+                    // ),
+                    style: ButtonStyle(
+                      backgroundColor: MaterialStatePropertyAll(Colors.blueAccent),
+                      foregroundColor: MaterialStatePropertyAll(Colors.white)
+                    ),
+
+                    onPressed: () {
                       if(!appController.isAuthenticating.value){
                         appController.authenticate();
                       }
                     },
-                    child:  Container(
-                      padding: EdgeInsets.symmetric(horizontal: 35, vertical: 12),
-                      decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(10),
-                          color: appController.isAuthenticating.value ? Colors.grey.shade300 : Colors.white
-                      ),
-                      child: Text("Authenticate", style: TextStyle(
+                    child: Text("Authenticate", style: TextStyle(
                         fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                      ),),
+                        fontWeight: FontWeight.normal,
+                        color: Colors.white
+                    ),),
 
-                    ),
                   ),
                   SizedBox(height: 20,),
                   (appController.authError.value.length < 1) ?Container(): Container(
@@ -144,7 +166,7 @@ class AuthPage extends StatelessWidget {
 
               ))),
           appController.isAuthenticating.value ? Container(
-            color: Color.fromARGB(250, 3, 54, 183),
+            color:  Color(0xFF1C1B1F),
             alignment: Alignment.center,
             child: CircularProgressIndicator(color: Colors.white,),
           ) : Container(),

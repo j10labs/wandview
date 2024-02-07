@@ -15,22 +15,34 @@ class ChartsPage extends StatefulWidget {
 class _ChartsPageState extends State<ChartsPage> {
   final appController = Get.find<AppController>();
   bool terminated = false;
-
+  var runId = Get.arguments[0];
   @override
   void initState() {
     super.initState();
-    loop();
+    appController.clearHistory();
+    loop(firstLoop: true);
   }
 
-  void loop() async {
+  void loop({firstLoop=false}) async {
     if (terminated) return;
+    if(Get.arguments == null){
+      terminated = true;
+      return;
+    }
+
     final run = appController.runs.firstWhere((element) => element["id"] == Get.arguments[0]);
-    await Future.delayed(Duration(seconds: 1));
-    await appController.loadHistory(run["name"], run["project"]["name"], run["project"]["entityName"]);
+
+    await appController.loadHistory(run["name"], run["project"]["name"], run["project"]["entityName"],
+        allowCache: firstLoop
+    );
+    if(!firstLoop) {
+      await Future.delayed(Duration(seconds: 5));
+    }
     if (!terminated) {
       loop();
     }
   }
+
 
   @override
   void dispose() {
@@ -47,10 +59,84 @@ class _ChartsPageState extends State<ChartsPage> {
     final spec = chartInfo["spec"];
     final panelBankConfig = spec["panelBankConfig"];
     final List<dynamic> sections = panelBankConfig["sections"];
+    var titleByState = {
+      "running": "Running",
+      "finished": "Finished",
+      "crashed": "Crashed",
+    };
+
+    var colorByState = {
+      "running": Colors.green,
+      "finished": Colors.green,
+      "crashed": Colors.red,
+    };
     return DefaultTabController(length: sections.length,
     child:Scaffold(
+
       appBar: AppBar(
-        title: Text(run["displayName"] + " (" + run["state"] + ")"),
+
+        title: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Text(
+              run["displayName"],
+              style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 20),
+            ),
+            Container(
+              margin: EdgeInsets.only(left: 10),
+              decoration: BoxDecoration(
+                  color: colorByState[run["state"]]!
+                      .withOpacity(0.90),
+                  borderRadius:
+                  BorderRadius.circular(4.0)),
+              padding: EdgeInsets.symmetric(
+                  vertical: 2.0, horizontal: 8.0),
+              child: Row(
+                children: [
+                  if (run["state"] == "running")
+                    Container(
+                      margin: EdgeInsets.only(right: 5),
+                      child: Icon(
+                        Icons.refresh,
+                        size: 8,
+                        color: Colors.white,
+                      ),
+                    )
+                  else if (run["state"] == "crashed")
+                    Container(
+                      margin: EdgeInsets.only(right: 5),
+                      child: Icon(
+                        Icons.error,
+                        size: 8,
+                        color: Colors.white,
+                      ),
+                    )
+                  else if (run["state"] == "finished")
+                      Container(
+                        margin: EdgeInsets.only(right: 5),
+                        // width: 5,
+                        // height: 5,
+                        child: Icon(
+                          Icons.check,
+                          size: 8,
+                          color: Colors.white,
+                        ),
+                      ),
+                  Text(
+                    titleByState[run["state"]]!,
+                    style: TextStyle(
+                        fontSize: 10,
+                        color:
+                        Colors.white,
+                        fontWeight: FontWeight.bold),
+                  )
+                ],
+              ),
+            )
+          ],
+        ),
         bottom:  TabBar(
           tabs: [
             ...(sections.map((section) {
@@ -63,7 +149,7 @@ class _ChartsPageState extends State<ChartsPage> {
         child: Container(
           width: double.infinity,
           height: double.infinity,
-          color: Colors.white,
+          //color: Colors.white,
           child:  Container(
     width: double.infinity,
     child:TabBarView(
@@ -77,32 +163,41 @@ class _ChartsPageState extends State<ChartsPage> {
                   child: RefreshIndicator(onRefresh: ()async{
                     await appController.loadCharts();
                     await appController.loadHistory(run["name"], run["project"]["name"], run["project"]["entityName"]);
-                  }, child: ListView.builder(itemBuilder: (context,index){
+                  }, child: ListView.builder(
+                    addAutomaticKeepAlives: true,
+                    itemBuilder: (context,index){
                     var panel = section["panels"][index];
                     final xAxis = panel["xAxis"] ?? sectionWideXAis ?? (isSystemMetrics ? "_runtime" : "_step");
-                    return Obx(()=>GestureDetector(
+                    return  GestureDetector(
                         onTap: (){
-                          Get.toNamed("/chartScreen");
+                          Get.toNamed("/chartScreen", arguments: [
+                            chartId,
+                            panel,
+                            xAxis,
+                            section,
+                            isSystemMetrics
+                          ]);
                         },
                         child:Container(
                           width: double.infinity,
-                          margin: EdgeInsets.all(10),
-                          child: ChartComponent(
-                            key: Key(section["name"]+panel["__id__"]+xAxis),
-                            history: isSystemMetrics ?  appController.systemMetrics.value:appController.runHistory.value,
-                            spec: panel,
-                            xAxis: xAxis,
-                            onPressed: (){
-                              Get.toNamed("/chartScreen", arguments: [
-                                chartId,
-                                panel,
-                                xAxis,
-                                section,
-                                isSystemMetrics
-                              ]);
-                            },
-                          ),
-                        )));
+
+                          child: AbsorbPointer(
+                              absorbing: true,
+                              child:ChartComponent(
+                                isBordered: true,
+                                runName: run["name"],
+                                key: Key(section["name"]+panel["__id__"]+xAxis),
+                                historyWatchable: isSystemMetrics ?  appController.systemMetrics:appController.runHistory,
+                                spec: panel,
+                                xAxis: xAxis,
+                                onPressed: (model){
+
+                                },
+                                lastValuesReport: (lastValues){
+                                  print(lastValues);
+                                },
+                              )),
+                        ));
                   }, itemCount: section["panels"].length,),
                 ));
               }).toList())
