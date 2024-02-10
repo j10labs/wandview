@@ -8,8 +8,8 @@ Dart: 3.2.5
 
 ## Installation
 
-Android: https://play.google.com/store/apps/details?id=com.read21.wandview.wandview
-iOS: https://apps.apple.com/us/app/wandview/id6477268896?platform=iphone
+- Android: https://play.google.com/store/apps/details?id=com.read21.wandview.wandview
+- iOS: https://apps.apple.com/us/app/wandview/id6477268896?platform=iphone
 
 ## How to setup
 1. Clone the repository
