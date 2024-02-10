@@ -9,6 +9,7 @@ import 'package:flutter/widgets.dart';
 import 'package:get/get.dart';
 import 'package:get/get_core/src/get_main.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:visibility_detector/visibility_detector.dart';
 
 import '../utils/controllers.dart';
 import '../utils/utilities.dart';
@@ -150,12 +151,13 @@ class LineChartPainter extends CustomPainter {
       var lastSeenStepExp = lastSeenDomain!;
       if(lastSeenStepExp! != null){
         sizeXToDraw = null;
-
+        var largestValue = 0.0;
         for (var (pnt, series) in chartData.smoothedSeriesItems) {
-           for (var (ix, point) in series.points.indexed) {
-             if (point.x > lastSeenStepExp) {
+           for (var point in series.points.reversed) {
+             largestValue = max(largestValue, point.x.toDouble());
+             if (point.x <= lastSeenStepExp) {
                sizeXToDraw = transform(point.x, size.width, chartData.min_x.toDouble(), chartData.max_x.toDouble(), alpha: 0.9);
-               sizeXToDraw += (size.width * 0.09);
+               sizeXToDraw  += (size.width * 0.05);
                break;
              }
            }
@@ -164,7 +166,7 @@ class LineChartPainter extends CustomPainter {
            }
         }
            // transform(lastSeenStepExp, size.width, chartData.min_x.toDouble(), chartData.max_x.toDouble(), alpha: 0.9);
-        if(sizeXToDraw != null){
+        if(sizeXToDraw != null && (largestValue>lastSeenStepExp)){
 
 
         var bgPaint = Paint()
@@ -180,7 +182,7 @@ class LineChartPainter extends CustomPainter {
           canvas.drawRect(drawRect, bgPaint);
 
           var paint = Paint()
-            ..color = Colors.pink
+            ..color = Colors.pink.withOpacity(0.5)
             ..style = PaintingStyle.stroke
             ..strokeWidth = 1.0;
 
@@ -201,7 +203,7 @@ class LineChartPainter extends CustomPainter {
         var x = transform(point.x, size.width, chartData.min_x.toDouble(), chartData.max_x.toDouble(), alpha: 0.9);
         var y = transform(point.y, size.height, chartData.min_y.toDouble(), chartData.max_y.toDouble());
 
-        x += (size.width * 0.09);
+        x += (size.width * 0.05);
         y = (size.height) - y - (size.height * 0.1); //
         if (ix == 0) {
           path.moveTo(x, y);
@@ -446,11 +448,17 @@ class RunItemState extends State<RunItem> with AutomaticKeepAliveClientMixin {
     histKeys = histKeys
         .where((element) =>
     !element.startsWith("l__") &&   !element.startsWith("_") && !["lr"].contains(element))
-        .take(15)
+        .take(10)
         .toSet();
+    // sort histKeys in a way small keys come first
+    histKeys = (histKeys.toList()..sort((a, b) => a.length.compareTo(b.length))).toSet();
     var _activeMetrics = _prefs.getStringList(run["id"] + "activeMetrics");
     var _lastSeenStep = _prefs.getDouble(run["name"] + "prevLastSeenStep") ?? 0;
-    var analyzedActiveMetrics= ((_activeMetrics == null)  || (_activeMetrics.isEmpty))? (histKeys.take(4).toSet()) : _activeMetrics.toSet()!;//(.isEmpty ?  : histKeys.take(4).toSet());
+    var simpleKeys = histKeys.where((element) => !element.contains("step") && !element.contains("epoch")).toSet();
+    if(simpleKeys.length < 1){
+      simpleKeys = histKeys;
+    }
+    var analyzedActiveMetrics= ((_activeMetrics == null)  || (_activeMetrics.isEmpty))? (simpleKeys.take(6).toSet()) : _activeMetrics.toSet()!;//(.isEmpty ?  : histKeys.take(4).toSet());
 
 
     var histColors = <String, Color>{};
@@ -480,88 +488,93 @@ class RunItemState extends State<RunItem> with AutomaticKeepAliveClientMixin {
   }
 
   var terminated = false;
+  var paused = false;
 
   void loop({firstLoop = false}) async {
     if ((run["state"] == "finished") && !firstLoop) {
       return;
     }
+    if(!paused){
+      try{
+        var (metrics, systemMetrics, hasChanged) = await widget.loadHistory(
+            run["name"], run["project"]["name"], run["project"]["entityName"],
+            allowCache: firstLoop,
+            onProject: true,
+            previousMetrics:prevMetrics ,
+            previousSystemMetrics: prevSystemMetrics
 
-   try{
-     var (metrics, systemMetrics, hasChanged) = await widget.loadHistory(
-         run["name"], run["project"]["name"], run["project"]["entityName"],
-         allowCache: firstLoop,
-         onProject: true,
-       previousMetrics:prevMetrics ,
-         previousSystemMetrics: prevSystemMetrics
+        );
+        if (metrics != null && (hasChanged || firstLoop)) {
+          // if (ranHistory.length > 5000) {
+          //   ranHistory = ranHistory.sublist(
+          //       ranHistory.length - 5000, ranHistory.length);
+          // }
+          print("Gotten the data:)");
 
-     );
-     if (metrics != null && (hasChanged || firstLoop)) {
-       // if (ranHistory.length > 5000) {
-       //   ranHistory = ranHistory.sublist(
-       //       ranHistory.length - 5000, ranHistory.length);
-       // }
-       print("Gotten the data:)");
-
-       this.prevMetrics = metrics;
-       this.prevSystemMetrics = systemMetrics;
-       print("Processed the data:)");
-
-
+          this.prevMetrics = metrics;
+          this.prevSystemMetrics = systemMetrics;
+          print("Processed the data:)");
 
 
-       var lastUpdate = this.prevMetrics.lastOrNull;
 
 
-       if(firstLoop){
-         var vals =  postFirstLoad(this.prevMetrics);
-         print("Post-Processed the data:)");
-         activeMetrics = vals[0];
-
-         histKeys = vals[2];
-         histColors = vals[3];
-       }
-
-       print("Will compute the data:)");
-       var _chartData= await compute(prepareChartData,PrepareChartInput(histKeys: histKeys,
-           histColors: histColors,
-           metrics: this.prevMetrics,
-           activeMetrics: activeMetrics));
-
-       print("Computed the data:)");
-       if(this.mounted){
-         setState(() {
-           this.chartData = _chartData;
-
-           this.activeMetrics = activeMetrics;
-           this.histKeys = histKeys;
-           this.histColors = histColors;
-           if(firstLoop){
-             isLoading = false;
+          var lastUpdate = this.prevMetrics.lastOrNull;
 
 
-           }
-           if(lastUpdate != null){
-             double? timestamp = lastUpdate["l___timestamp"] ?? lastUpdate["_timestamp"];
-             if(timestamp != null){
-               this.lastUpdatedDuration =DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(timestamp.toInt() * 1000));
-             }
+          if(firstLoop){
+            var vals =  postFirstLoad(this.prevMetrics);
+            print("Post-Processed the data:)");
+            activeMetrics = vals[0];
 
-           }
-         });
-         // force a repaint
-       }
+            histKeys = vals[2];
+            histColors = vals[3];
+          }
 
-     } else {
-        if(!hasChanged){
-          print("No change in data");
+          print("Will compute the data:)");
+          var _chartData= await compute(prepareChartData,PrepareChartInput(histKeys: histKeys,
+              histColors: histColors,
+              metrics: this.prevMetrics,
+              activeMetrics: activeMetrics));
 
+          print("Computed the data:)");
+          if(this.mounted){
+            setState(() {
+              this.chartData = _chartData;
+
+              this.activeMetrics = activeMetrics;
+              this.histKeys = histKeys;
+              this.histColors = histColors;
+              if(firstLoop){
+                isLoading = false;
+
+
+              }
+              if(lastUpdate != null){
+                double? timestamp = lastUpdate["l___timestamp"] ?? lastUpdate["_timestamp"];
+                if(timestamp != null){
+                  this.lastUpdatedDuration =DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(timestamp.toInt() * 1000));
+                }
+
+              }
+            });
+            // force a repaint
+          }
+
+        } else {
+          if(!hasChanged){
+            print("No change in data");
+
+          }
         }
-     }
-   }catch( e, trace){
-      print("Error: ${e}");
-      print("Trace: ${trace}");
-      // rethrow;
-   }
+      }catch( e, trace){
+        print("Error: ${e}");
+        print("Trace: ${trace}");
+        // rethrow;
+      }
+    }else{
+      print("Paused skipping logging for now");
+    }
+
     if(!firstLoop){
       await Future.delayed(Duration(seconds: 6));
     }
@@ -570,6 +583,22 @@ class RunItemState extends State<RunItem> with AutomaticKeepAliveClientMixin {
      loop();
     }
   }
+
+  @override
+  void activate() {
+
+    paused = false;
+    super.activate();
+  }
+  @override
+  void deactivate() {
+    paused = true;
+    super.deactivate();
+  }
+
+
+
+
 
   @override
   void dispose() {
@@ -592,7 +621,7 @@ class RunItemState extends State<RunItem> with AutomaticKeepAliveClientMixin {
       "finished": Colors.green.withOpacity(0.1),
       "crashed": Colors.red.withOpacity(0.1),
     };
-    return Container(
+    return  VisibilityDetector(key: ValueKey(runId), child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 15),
         decoration: BoxDecoration(
@@ -606,7 +635,7 @@ class RunItemState extends State<RunItem> with AutomaticKeepAliveClientMixin {
                   Get.toNamed("/charts", arguments: [run["id"]]);
                 },
                 child: Card(
-                    // color: Colors.white,
+                  // color: Colors.white,
                     elevation: 0,
                     // surfaceTintColor: Colors.white,
                     shape: RoundedRectangleBorder(
@@ -616,20 +645,20 @@ class RunItemState extends State<RunItem> with AutomaticKeepAliveClientMixin {
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(10),
                         border:
-                            Border.all(color: Colors.white.withOpacity(0.1)),
+                        Border.all(color: Colors.white.withOpacity(0.1)),
                         // color: Colors.grey.shade200,
                       ),
                       padding: EdgeInsets.all(3),
                       width: double.infinity,
                       child: (isEmpty || isLoading || (chartData == null))
                           ? Container(
-                              width: double.infinity,
-                              alignment: Alignment.center,
-                              height: 150,
-                              child: isLoading ?
-                              const Text("Loading...")
-                                  : const Text("No data available"),
-                            )
+                        width: double.infinity,
+                        alignment: Alignment.center,
+                        height: 150,
+                        child: isLoading ?
+                        const Text("Loading...")
+                            : const Text("No data available"),
+                      )
                           :CustomPaint(
                         key: Key(run["id"]+"_PAINTER"),
                         size:  Size(double.infinity, 150), // Set the canvas size
@@ -649,180 +678,192 @@ class RunItemState extends State<RunItem> with AutomaticKeepAliveClientMixin {
                       flex: 1,
                       child: Container(
                           child: Column(
-                        children: [
-                          Container(
-                              width: double.infinity,
-                              child: Row(
-                                children: [
-                                  Text(
-                                    run["displayName"],
-                                    style: TextStyle(
-                                        fontWeight: FontWeight.bold,
+                            children: [
+                              Container(
+                                  width: double.infinity,
+                                  child: Row(
+                                    children: [
+                                      Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            run["displayName"],
+                                            style: TextStyle(
+                                                fontWeight: FontWeight.bold,
 
-                                        fontSize: 18),
-                                  ),
-                                  Container(
-                                    margin: EdgeInsets.only(left: 10),
-                                    decoration: BoxDecoration(
-                                        color: colorByState[run["state"]]!,
-                                        borderRadius:
-                                            BorderRadius.circular(4.0)),
-                                    padding: EdgeInsets.symmetric(
-                                        vertical: 1.0, horizontal: 4.0),
-                                    child: Row(
-                                      children: [
-                                        if (run["state"] == "running")
-                                          Container(
-                                            margin: EdgeInsets.only(right: 5),
-                                            child: Icon(
-                                              Icons.refresh,
-                                              size: 8,
-                                              color: Colors.white,
-                                            ),
-                                          )
-                                        else if (run["state"] == "crashed")
-                                          Container(
-                                            margin: EdgeInsets.only(right: 5),
-                                            child: Icon(
-                                              Icons.error,
-                                              size: 8,
-                                              color: Colors.red,
-                                            ),
-                                          )
-                                        else if (run["state"] == "finished")
-                                          Container(
-                                            margin: EdgeInsets.only(right: 5),
-                                            // width: 5,
-                                            // height: 5,
-                                            child: Icon(
-                                              Icons.check,
-                                              size: 8,
-                                              color: Colors.green,
-                                            ),
+                                                fontSize: 18),
                                           ),
-                                        Text(
-                                          titleByState[run["state"]]!,
-                                          style: TextStyle(
-                                              fontSize: 9,
-                                              color: colorByState[run["state"]]!
+                                          Container(
+                                            // margin: EdgeInsets.only(left: 10),
+                                            decoration: BoxDecoration(
+                                                color: colorByState[run["state"]]!,
+                                                borderRadius:
+                                                BorderRadius.circular(4.0)),
+                                            padding: EdgeInsets.symmetric(
+                                                vertical: 1.0, horizontal: 4.0),
+                                            child: Row(
+
+                                              children: [
+                                                if (run["state"] == "running")
+                                                  Container(
+                                                    margin: EdgeInsets.only(right: 5),
+                                                    child: Icon(
+                                                      Icons.refresh,
+                                                      size: 8,
+                                                      color: Colors.white,
+                                                    ),
+                                                  )
+                                                else if (run["state"] == "crashed")
+                                                  Container(
+                                                    margin: EdgeInsets.only(right: 5),
+                                                    child: Icon(
+                                                      Icons.error,
+                                                      size: 8,
+                                                      color: Colors.red,
+                                                    ),
+                                                  )
+                                                else if (run["state"] == "finished")
+                                                    Container(
+                                                      margin: EdgeInsets.only(right: 5),
+                                                      // width: 5,
+                                                      // height: 5,
+                                                      child: Icon(
+                                                        Icons.check,
+                                                        size: 8,
+                                                        color: Colors.green,
+                                                      ),
+                                                    ),
+                                                Text(
+                                                  titleByState[run["state"]]!,
+                                                  style: TextStyle(
+                                                      fontSize: 9,
+                                                      color: colorByState[run["state"]]!
                                                           .opacity >
-                                                      0.2
-                                                  ? Colors.white
-                                                  : colorByState[run["state"]]!
-                                                      .withOpacity(1.0),
-                                              fontWeight: FontWeight.bold),
-                                        )
-                                      ],
-                                    ),
-                                  )
-                                ],
-                              )),
-                          Container(
-                            margin: EdgeInsets.only(
-                                top: (histKeys!.length > 0) ? 10 : 0),
-                            width: double.infinity,
-                            child: Wrap(
-                              spacing: 5,
-                              runSpacing: 5,
-                              alignment: WrapAlignment.start,
-                              runAlignment: WrapAlignment.start,
-                              children: [
-                                ...histKeys
-                                    .where(
-                                        (element) => !element.startsWith("_"))
-                                    .map((hkey) {
-                                  return GestureDetector(
-                                    child: Container(
-                                        // margin: EdgeInsets.only(right: 5),
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 10, vertical: 4),
-                                        constraints:
+                                                          0.2
+                                                          ? Colors.white
+                                                          : colorByState[run["state"]]!
+                                                          .withOpacity(1.0),
+                                                      fontWeight: FontWeight.bold),
+                                                )
+                                              ],
+                                            ),
+                                          )
+                                        ],),
+
+                                    ],
+                                  )),
+                              Container(
+                                margin: EdgeInsets.only(
+                                    top: (histKeys!.length > 0) ? 10 : 0),
+                                width: double.infinity,
+                                child: Wrap(
+                                  spacing: 5,
+                                  runSpacing: 5,
+                                  alignment: WrapAlignment.start,
+                                  runAlignment: WrapAlignment.start,
+                                  children: [
+                                    ...histKeys
+                                        .where(
+                                            (element) => !element.startsWith("_"))
+                                        .map((hkey) {
+                                      return GestureDetector(
+                                        child: Container(
+                                          // margin: EdgeInsets.only(right: 5),
+                                            padding: const EdgeInsets.symmetric(
+                                                horizontal: 10, vertical: 4),
+                                            constraints:
                                             BoxConstraints(minWidth: 50),
-                                        //alignment: Alignment.center,
+                                            //alignment: Alignment.center,
 
-                                        decoration: BoxDecoration(
-                                          color: activeMetrics.contains(hkey)
-                                              ? histColors[hkey]
-                                              : histColors[hkey]
+                                            decoration: BoxDecoration(
+                                              color: activeMetrics.contains(hkey)
+                                                  ? histColors[hkey]
+                                                  : histColors[hkey]
                                                   ?.withOpacity(0.1),
-                                          borderRadius:
+                                              borderRadius:
                                               BorderRadius.circular(5),
-                                        ),
-                                        child: Text(
-                                          hkey,
-                                          style: TextStyle(
-                                            fontSize: 10,
-                                            fontWeight: FontWeight.w800,
-                                            color: activeMetrics.contains(hkey)
-                                                ? Colors.white
-                                                : histColors[hkey]
+                                            ),
+                                            child: Text(
+                                              hkey,
+                                              style: TextStyle(
+                                                fontSize: 10,
+                                                fontWeight: FontWeight.w800,
+                                                color: activeMetrics.contains(hkey)
+                                                    ? Colors.white
+                                                    : histColors[hkey]
                                                     ?.withOpacity(0.7),
-                                          ),
-                                          textAlign: TextAlign.center,
-                                        )),
-                                    onTap: () {
-                                      setState(() {
-                                        if (activeMetrics.contains(hkey)) {
-                                          activeMetrics.remove(hkey);
-                                        } else {
-                                          //if activeMetrics.length < 6, add it, else, remove the first one and add it
-                                          if (activeMetrics.length < 6) {
-                                            activeMetrics.add(hkey);
-                                          } else {
-                                            activeMetrics
-                                                .remove(activeMetrics.first);
-                                            activeMetrics.add(hkey);
-                                          }
-                                        }
-                                        changeActiveMetrics(activeMetrics);
-                                      });
-                                    },
-                                  );
-                                }).toList()
-                              ],
-                            ),
-                          ),
+                                              ),
+                                              textAlign: TextAlign.center,
+                                            )),
+                                        onTap: () {
+                                          setState(() {
+                                            if (activeMetrics.contains(hkey)) {
+                                              activeMetrics.remove(hkey);
+                                            } else {
+                                              //if activeMetrics.length < 6, add it, else, remove the first one and add it
+                                              if (activeMetrics.length < 10) {
+                                                activeMetrics.add(hkey);
+                                              } else {
+                                                activeMetrics
+                                                    .remove(activeMetrics.first);
+                                                activeMetrics.add(hkey);
+                                              }
+                                            }
+                                            changeActiveMetrics(activeMetrics);
+                                          });
+                                        },
+                                      );
+                                    }).toList()
+                                  ],
+                                ),
+                              ),
 
 
-                        ],
-                      ))),
+                            ],
+                          ))),
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
-                    if(this.lastUpdatedDuration!=null) Container(
-                      margin: EdgeInsets.only(bottom: 5),
-                      child: Text(
-                      "Updated "+formatDuration(this.lastUpdatedDuration!),
-                      style: TextStyle(fontSize: 8.0, height: 0.8, color: Colors.white.withOpacity(0.6)),
-                    ),
-                      alignment: Alignment.bottomRight,
-                    ),
-
-                    GestureDetector(
-
-                      child: Container(
-                        width: 35,
-                        height: 35,
-                        margin: EdgeInsets.only(top: 5),
-                        decoration: BoxDecoration(
-                          color: Colors.blueAccent.withOpacity(0.6),
-                          borderRadius: BorderRadius.circular(50),
+                      if(this.lastUpdatedDuration!=null) Container(
+                        margin: EdgeInsets.only(bottom: 5),
+                        child: Text(
+                          "Updated "+formatDuration(this.lastUpdatedDuration!),
+                          style: TextStyle(fontSize: 8.0, height: 0.8, color: Colors.white.withOpacity(0.6)),
                         ),
-                        alignment: Alignment.center,
-                        child: Icon(Icons.chevron_right,
-                            size: 20, color: Colors.white),
+                        alignment: Alignment.bottomRight,
                       ),
-                      onTap: () {
-                        Get.toNamed("/charts", arguments: [run["id"]]);
-                      },
-                    )
-                  ],)
+
+                      GestureDetector(
+
+                        child: Container(
+                          width: 35,
+                          height: 35,
+                          margin: EdgeInsets.only(top: 5),
+                          decoration: BoxDecoration(
+                            color: Colors.blueAccent.withOpacity(0.6),
+                            borderRadius: BorderRadius.circular(50),
+                          ),
+                          alignment: Alignment.center,
+                          child: Icon(Icons.chevron_right,
+                              size: 20, color: Colors.white),
+                        ),
+                        onTap: () {
+                          Get.toNamed("/charts", arguments: [run["id"]]);
+                        },
+                      )
+                    ],)
 
                 ],
               ),
             ),
           ],
-        ));
+        )), onVisibilityChanged: (info){
+     if(info.visibleFraction> 0.2){
+       paused =false;
+     }else{
+       paused = true;
+     }
+    });
   }
 
   @override

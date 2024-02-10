@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:get/get.dart';
 import 'package:get/get_core/src/get_main.dart';
+import 'package:visibility_detector/visibility_detector.dart';
 import 'package:wandview/components/chart.dart' ;
 import "dart:math";
 import '../utils/controllers.dart';
@@ -23,6 +24,7 @@ class _ChartScreenPageState extends State<ChartScreenPage> {
   dynamic run;
 
   var lastValues = <String, num>{}.obs;
+  var paused = false;
   @override
   void initState() {
     super.initState();
@@ -41,9 +43,21 @@ class _ChartScreenPageState extends State<ChartScreenPage> {
     }
     this.run = appController.runs.firstWhere((element) => element["id"] == Get.arguments[0]);
 
-    await appController.loadHistory(run["name"], run["project"]["name"], run["project"]["entityName"],
-        allowCache: firstLoop
-    );
+    if(!paused){
+
+      await appController.loadHistory(run["name"], run["project"]["name"], run["project"]["entityName"],
+          allowCache: firstLoop
+      );
+    }else{
+      print(" (chart screen) Paused because charts is not visible");
+    }
+
+    if (run["state"] == "finished" || run["state"] == "crashed") {
+      terminated = true;
+      return;
+    }
+
+
     if(!firstLoop) {
       await Future.delayed(Duration(seconds: 5));
     }
@@ -77,7 +91,16 @@ class _ChartScreenPageState extends State<ChartScreenPage> {
     // Getting the screen size
 
 
-    return Scaffold(
+    return VisibilityDetector(
+        key:ValueKey("ChartsScreen-"+chartId+section["name"] + panel["__id__"] + xAxis + "_chart"+"full"),
+    onVisibilityChanged: (VisibilityInfo info) {
+      if(info.visibleFraction> 0.2){
+        paused =false;
+      }else{
+        paused = true;
+      }
+    },
+    child:Scaffold(
       body: SafeArea(
         child: Container(
           padding: EdgeInsets.only(top: 20, bottom: 20, left: 0, right: 20),
@@ -101,7 +124,8 @@ class _ChartScreenPageState extends State<ChartScreenPage> {
                     Expanded(flex: 1,child:
                     ChartComponent(
                       runName: run["name"],
-                      key: Key(section["name"] + panel["__id__"] + xAxis + "_chart"),
+                      visibilityKey: "ChartsScreenVis-"+chartId+section["name"] + panel["__id__"] + xAxis + "_chart"+"full",
+                      key: Key(section["name"] + panel["__id__"] + xAxis + "_chart"+"full"),
                       historyWatchable: isSystemMetrics ? appController.systemMetrics : appController.runHistory,
                       spec: panel,
                       xAxis: xAxis, onPressed: (SelectionModel model, List<dynamic> metrics ) {
@@ -141,24 +165,30 @@ class _ChartScreenPageState extends State<ChartScreenPage> {
 
 
                     },
-                      lastValuesReport: (datum) {
+                      lastValuesReport: (datum, metrics) {
+                        print("Reported last values");
                         Map<String,num> _values = {};
                         (datum as Map).forEach(
 
                                 (key, value) {
                               if (value is num){
                                 if(key == "_runtime" || key == "_step"){
-                                  _values[key] = ((value)).floor() as num;
+                                  _values[key] = (deExpIt(value)).floor() as num;
                                 }else{
-                                  _values[key] = ((value)) as num;
+                                  if (metrics.contains(key)){
+                                    _values[key] = (exp(value)-1) as num;
+                                  }
 
                                 }
+
+
                               }
 
                             }
                         );
+                        _values = {...(lastValues.map((key, value) => MapEntry(key, value))),..._values};
                         var entries = _values.entries.toList()..sort((a,b){
-                          // _step, _runtime, ...
+                          // _step then _runtime should be first
                           if(a.key == "_step" || a.key == "_runtime"){
                             return -1;
                           }
@@ -240,7 +270,7 @@ class _ChartScreenPageState extends State<ChartScreenPage> {
           )],
         ),),
       ),
-    );
+    ));
   }
 
 }

@@ -7,6 +7,7 @@ import 'package:empire/empire.dart';
 import 'package:get/get.dart';
 import 'package:get/get_navigation/src/root/get_material_app.dart';
 import 'package:get/get_navigation/src/routes/transitions_type.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wandview/pages/charts.dart';
 import 'package:wandview/pages/chartscreen.dart';
@@ -34,6 +35,16 @@ void main() async {
   await FirebaseAnalytics.instance.setUserId(id:user!.uid);
   // await FirebaseAnalytics.instance.setAnalyticsCollectionEnabled(true);
   var _prefs = await SharedPreferences.getInstance();
+  // check if appVersion (real) is the same as the one in the prefs
+  var pInfo = await PackageInfo.fromPlatform();
+  var appVersion = pInfo.version;
+  if (_prefs.getString("appVersion") != appVersion) {
+    // if not, then clear the prefs
+    _prefs.clear();
+    // and set the new appVersion
+    _prefs.setString("appVersion", appVersion);
+  }
+
   _prefs.setString("appSession",generateRandomString() );
   runApp(MyApp());
 

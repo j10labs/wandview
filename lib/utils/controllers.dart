@@ -1,7 +1,10 @@
 import 'dart:convert';
 import 'dart:ffi';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_vibrate/flutter_vibrate.dart';
 import 'package:get/get.dart';
 import 'package:graphql/client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -11,6 +14,10 @@ class AuthObject {
   final String apiKey;
   final bool authenticated;
   AuthObject(this.host, this.apiKey, this.authenticated);
+}
+
+List<Map<String,dynamic>> decodeJsonList(List<dynamic> jsonList) {
+  return jsonList.map<Map<String,dynamic>>((e) => jsonDecode(e) as Map<String,dynamic>).toList();
 }
 class UserProfile {
   final String username;
@@ -152,16 +159,26 @@ class AppController extends GetxController {
     systemMetrics.value=[];
   }
 
-  compareSimiliarity(List<Map<String, dynamic>> a, List<Map<String, dynamic>> b){
+  compareSimiliarity(List<dynamic> a, List<dynamic> b){
     // return false;
     var lastA = a.lastOrNull;
     var lastB = b.lastOrNull;
+
     if(lastA == null || lastB == null) return false;
-    if(lastA.keys.length != lastB.keys.length) return false;
-    if (a.length != b.length) return false;
+    //if(lastA.keys.length != lastB.keys.length) return false;
+    //if (a.length != b.length) return false;
     for(var key in lastB.keys){
       var lastAComp = lastA["l__"+key] ?? lastA[key];
-      if(lastAComp != lastB[key]) return false;
+      if((lastAComp != null && lastB[key] != null)){
+        if(key == "_step" || key == "_runtime"){
+          var isSimiliar = lastAComp == lastB[key];
+          print("Comparing $key : $lastAComp and ${lastB[key]}, similiar=$isSimiliar");
+          if(!isSimiliar) return false;
+        }
+
+
+      }
+
     }
     return true;
   }
@@ -187,7 +204,41 @@ class AppController extends GetxController {
     }
   }
 
-  loadHistory(runId, projectName, entityName, {onProject=false, allowCache=false, List<Map<String,dynamic>>? previousMetrics=null, List<Map<String,dynamic>>? previousSystemMetrics=null})async{
+  queryLastStep(runId, projectName, entityName) async {
+    final QueryOptions options = QueryOptions(
+      document: gql(r'''
+       query ($runId: String!, $projectName: String!, $entityName: String!) {
+         
+         project (name:$projectName, entityName: $entityName ){
+         run(name: $runId) {
+         historyKeys
+         }
+         }
+         
+       }     
+        
+    '''),
+      variables: {
+        "runId": runId,
+        "projectName": projectName,
+        "entityName": entityName
+      },
+      fetchPolicy: FetchPolicy.cacheAndNetwork
+    );
+
+    var result = await client.query(options);
+    try{
+      var lastStep = (result.data?["project"]["run"]["historyKeys"]["lastStep"] as num? ) ?? 0;
+      return (max(0,lastStep- 80000), lastStep+1000);
+    }catch(e){
+      return (0, 80000);
+    }
+
+
+  }
+
+  loadHistory(runId, projectName, entityName, {onProject=false, allowCache=false, List<Map<String,dynamic>>? previousMetrics=null, List<Map<String,dynamic>>? previousSystemMetrics=null, bool forceRefresh=false})async{
+    //return (<Map<String,dynamic>>[],<Map<String,dynamic>>[],false);
     if(chartInfo.isEmpty){
       await loadCharts();
     }
@@ -220,16 +271,21 @@ class AppController extends GetxController {
       systemMetrics.value = finalSystemMetrics;
     }
 
+    var (qLastStep, qTotalLimit) = await queryLastStep(runId, projectName, entityName);
+
     final QueryOptions options = QueryOptions(
       document: gql(r'''
-       query ($runId: String!, $projectName: String!, $entityName: String!) {
+       query ($runId: String!, $projectName: String!, $entityName: String!, $qLastStep: Int64!, $qTotalLimit: Int64!) {
          
          project (name:$projectName, entityName: $entityName ){
          run(name: $runId) {
-         history (maxStep: 10000000,minStep: 0)
+         history(minStep: $qLastStep, maxStep: $qTotalLimit)
          events
-         systemMetrics 
+         systemMetrics
          summaryMetrics
+         historyKeys
+         historyLineCount
+         historyTail
          
          
          id
@@ -244,10 +300,11 @@ class AppController extends GetxController {
       variables: {
         "runId": runId,
         "projectName": projectName,
-        "entityName": entityName
+        "entityName": entityName,
+        "qLastStep": qLastStep,
+        "qTotalLimit": qTotalLimit
       },
       fetchPolicy: allowCache ?FetchPolicy.cacheFirst : FetchPolicy.networkOnly,
-      pollInterval: Duration(seconds: 2),
       cacheRereadPolicy: allowCache ? CacheRereadPolicy.mergeOptimistic : CacheRereadPolicy.ignoreAll
     );
 
@@ -256,28 +313,30 @@ class AppController extends GetxController {
 
     final QueryResult result = await client.query(options);
 
+
+
     result.parserFn = (response) {
       //parse it to projects and runs, and interlock them
       var history = response["project"]["run"]["history"] as List;
       var events = response["project"]["run"]["events"] as List;
+      var lastStep = response["project"]["run"]["historyKeys"]["lastStep"] as num?;
 
-
-      return [history.map<Map<String,dynamic>>((e) {
-        return jsonDecode(e) as Map<String,dynamic>;
-      }).toList(), events.map<Map<String,dynamic>>((e) {
-        return jsonDecode(e) as Map<String,dynamic>;
-      }).toList()];
+      return [history.toList(),
+        events.toList(),
+        lastStep];
     };
     if(result.hasException){
       print("Something went wrong!");
       print(result.exception);
       return;
     }
-    var [List<Map<String,dynamic>> queriedHistory, List<Map<String,dynamic>> queriedSystemMetrics] = result.parsedData as List<dynamic>;
+    var [List<dynamic> _queriedHistory, List<dynamic> _queriedSystemMetrics, num? lastStep] = result.parsedData as List<dynamic>;
+    print("Downloaded ${_queriedHistory.length} Histories");
+    print("Downloaded ${_queriedSystemMetrics.length} System Metrics");
 
-
+    var queriedHistory = await compute(decodeJsonList, _queriedHistory);
+    var queriedSystemMetrics = await compute(decodeJsonList, _queriedSystemMetrics);
     //check if runHistory is the same as queriedHistory
-
 
 
     var runHistoryIsSimiliar = compareSimiliarity(finalRunHistory, queriedHistory);
@@ -285,15 +344,28 @@ class AppController extends GetxController {
 
 
 
+    var shouldVibrate = false;
+    if (!runHistoryIsSimiliar || forceRefresh) {
+      if(!allowCache){
+        // vibrate the phone
 
-    if (!runHistoryIsSimiliar) {
+        shouldVibrate = true;
+      }
+      print("Run History is not similiar");
       var formattedHistory =(await compute(isolatedRun,queriedHistory)) as List<Map<String,dynamic>>;
 
       prefs.setString(runId+"history", jsonEncode(formattedHistory));
       finalRunHistory = formattedHistory;
 
+    } else {
+      print("Run History is similiar");
     }
-    if (!systemMetricsIsSimiliar) {
+    if (!systemMetricsIsSimiliar || forceRefresh) {
+      // if (!allowCache){
+      //   // vibrate the phone
+      //   shouldVibrate = true;
+      // }
+      print("System Metrics is not similiar");
       var formattedSystemMetrics = (await compute(isolatedRun,queriedSystemMetrics)) as List<Map<String,dynamic>>;
 
       prefs.setString(runId+"systemMetrics", jsonEncode(formattedSystemMetrics));
@@ -301,8 +373,15 @@ class AppController extends GetxController {
       if(!onProject){
         systemMetrics.value = finalSystemMetrics;
       }
+    } else {
+      print("System Metrics is similiar");
     }
 
+    if(shouldVibrate){
+      if (await Vibrate.canVibrate) {
+        Vibrate.vibrate();
+      }
+    }
     if(!runHistoryIsSimiliar || allowCache){
       refreshLastSeen(runId, finalRunHistory);
     }
@@ -326,7 +405,7 @@ class AppController extends GetxController {
       document: gql(r'''
        query {
          viewer {
-           runs (order: "-createdAt") {
+         projects (order: "-createdAt") {
               pageInfo {
                 hasNextPage
                   hasPreviousPage
@@ -334,43 +413,49 @@ class AppController extends GetxController {
                   endCursor
               }
               edges {
-                node {
-                  
-                  
-                  id
-                  name
-                  
-                  
-                }
+              
+              node {
+                name  
+                id
+               
+                createdAt
+                entityName
+                entityId
+                ndbId
+                userId
+
+       
+                 
+              }              
               }
             }
-            
-            views{
-                 pageInfo {
-                hasNextPage
-                  hasPreviousPage
-                  startCursor
-                  endCursor
-              }
-              edges {
-                node {
-                  type
-                  description 
-                  locked
-                  spec
-                  displayName
-                  createdAt
-                  createdUsing
-                  
-                }
-              }
-                
-            }
-            
-            
-            
-            
-                
+              views {
+                    pageInfo {
+                  hasNextPage
+                    hasPreviousPage
+                    startCursor
+                    endCursor
+                    }
+                    edges {
+                    node {
+                     type
+                    description 
+                    locked
+                    spec
+                    displayName
+                    createdAt
+                    createdUsing
+                    projectId
+                    entityName
+                    
+                    project{
+                    id
+                    name
+                    }
+                    }                  
+                    }
+                  }
+              
          }
        }      
     '''),
@@ -378,11 +463,13 @@ class AppController extends GetxController {
     final QueryResult result = await client.query(options);
     result.parserFn = (response) {
       //parse it to projects and runs, and interlock them
-      var runs = List<dynamic>.of(response["viewer"]["runs"]["edges"]);
-      var views = List<dynamic>.of(response["viewer"]["views"]["edges"]);
+      var projects = response["viewer"]["projects"]["edges"];
+
       var historyAndCharts = <String, dynamic>{};
-      for (var run in runs) {
-        var runData = run["node"];
+      for (var project in projects) {
+        var projectData = project["node"];
+        var views = response["viewer"]["views"]["edges"].where((element) => (element["node"]["project"]?["id"] ==projectData["id"]));
+
         var historyAndChartsForRun = [];
         for (var view in views) {
           var viewData = view["node"];
@@ -406,7 +493,7 @@ class AppController extends GetxController {
             });
           }
         }
-        historyAndCharts[runData["id"]] = historyAndChartsForRun;
+        historyAndCharts[projectData["id"]] = historyAndChartsForRun;
       }
       return historyAndCharts;
     };

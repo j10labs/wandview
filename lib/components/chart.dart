@@ -8,6 +8,7 @@ import 'package:flutter/material.dart' as material;
 import 'package:charts_flutter/flutter.dart' as charts;
 import 'package:get/get.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:visibility_detector/visibility_detector.dart';
 import 'package:wandview/utils/utilities.dart';
 
 import '../utils/controllers.dart';
@@ -64,12 +65,16 @@ class ChartComponent extends StatefulWidget {
   final Function onPressed;
   final Function lastValuesReport;
   final bool isBordered;
+  final bool showLastValues;
   final String runName;
+  final String visibilityKey;
 
   ChartComponent(
       {super.key,
       this.maxHistoryLength = 600,
       this.isBordered = false,
+      required  this.visibilityKey,
+      this.showLastValues = false,
       required this.xAxis,
       required this.spec,
       required this.runName,
@@ -90,11 +95,14 @@ class _ChartComponentState extends State<ChartComponent>
   var xbounds = {};
   var slicedHistory = List<dynamic>.empty(growable: true);
   var isLoaded = true;
-  double? get  lastSeenDomain {
+  var paused = false;
+  double? get lastSeenDomain {
     var appSessionId = prefs.getString("appSession")!;
     var runName = widget.runName;
-    return prefs.getDouble("$appSessionId:$runName:lastSeenStep");
+    var lt= prefs.getDouble("$appSessionId:$runName:lastSeenStep");
+    return lt;
   }
+
   late SharedPreferences prefs;
 
   void loadUp(List<Map<String, dynamic>> _history, {setToState = true}) {
@@ -106,13 +114,23 @@ class _ChartComponentState extends State<ChartComponent>
     if (!this.mounted || disposed) {
       return;
     }
-    if (setToState) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => setState(() {
-            slicedHistory = _history;
-            bounds = _findAxisBoundsWithMargin(slicedHistory);
-            xbounds = _findDomainAxisBoundsWithMargin(slicedHistory);
-            history = _history;
-          }));
+    if (_history.lastOrNull != null) {
+      var sortedAndDeuplicatedKeys = (widget.spec["config"]["metrics"] ?? [])
+          .toSet()
+          .toList()
+          .map((metric) => metric.replaceAll("system/", "system."))
+          .toList();
+      widget.lastValuesReport(
+          _history.lastOrNull, sortedAndDeuplicatedKeys ?? []);
+    }
+
+    if (setToState && this.mounted && !paused) {
+      setState(() {
+        slicedHistory = _history;
+        bounds = _findAxisBoundsWithMargin(slicedHistory);
+        xbounds = _findDomainAxisBoundsWithMargin(slicedHistory);
+        history = _history;
+      });
     } else {
       slicedHistory = _history;
       bounds = _findAxisBoundsWithMargin(slicedHistory);
@@ -135,33 +153,40 @@ class _ChartComponentState extends State<ChartComponent>
     super.activate();
   }
 
+  get isChartValid {
+    return widget.spec.containsKey("viewType") &&
+        widget.spec["viewType"] == "Run History Line Plot" &&
+        (widget.spec["config"]["metrics"] != null);
+  }
+
   @override
   void initState() {
     // TODO: implement initState
+    if (isChartValid) {
+      SharedPreferences.getInstance().then((_prefs) {
+        prefs = _prefs;
+        loadUp(widget.historyWatchable.value.toList(), setToState: true);
+        historyWatchableStream = widget.historyWatchable.stream.listen((val) {
+          if (disposed) {
+            return;
+          }
 
-    SharedPreferences.getInstance().then((_prefs) {
-      prefs= _prefs;
-      loadUp(widget.historyWatchable.value.toList(), setToState: true);
-      historyWatchableStream = widget.historyWatchable.stream.listen((val) {
-        if (disposed) {
-          return;
-        }
+          if (this.mounted) {
+            loadUp(val, setToState: true);
+            // var applied =  applyLogarithmicScale(gaussianSmoothListMap(scaleDownByDomain((val ))));
+            // loadUp(applied);
+          }
 
-        if (this.mounted) {
-          loadUp(val, setToState: true);
-          // var applied =  applyLogarithmicScale(gaussianSmoothListMap(scaleDownByDomain((val ))));
-          // loadUp(applied);
-        }
-
-        // try{
-        //
-        // }catch(e){
-        //   throw e;
-        // }
-      }, onError: (e) {
-        throw e;
+          // try{
+          //
+          // }catch(e){
+          //   throw e;
+          // }
+        }, onError: (e) {
+          throw e;
+        });
       });
-    });
+    }
 
     super.initState();
   }
@@ -170,7 +195,10 @@ class _ChartComponentState extends State<ChartComponent>
   void dispose() {
     // TODO: implement dispose
     disposed = true;
-    historyWatchableStream.cancel();
+    if (isChartValid) {
+      historyWatchableStream.cancel();
+    }
+
     super.dispose();
   }
 
@@ -202,6 +230,8 @@ class _ChartComponentState extends State<ChartComponent>
         fractionalPart != null &&
         fractionalPart.length <= 4) {
       return value.toString();
+    } else if (value < 0.01) {
+      return (value.toStringAsExponential(1)); //.toStringAsPrecision(2);
     } else if (value < 1) {
       return value.toStringAsPrecision(2);
     }
@@ -231,11 +261,11 @@ class _ChartComponentState extends State<ChartComponent>
       return (exp(value)) - 1;
     }
 
+    var sortedAndDeuplicatedKeys = widget.spec["config"]["metrics"]
+        .toSet()
+        .toList()
+        .map((metric) => metric.replaceAll("system/", "system."));
     for (var (i, row) in slicedHistory.indexed) {
-      var sortedAndDeuplicatedKeys = widget.spec["config"]["metrics"]
-          .toSet()
-          .toList()
-          .map((metric) => metric.replaceAll("system/", "system."));
       for (var metric in sortedAndDeuplicatedKeys) {
         if (row[metric] is num) {
           var rowMetric = expNonNull(row[metric]) ??
@@ -381,7 +411,8 @@ class _ChartComponentState extends State<ChartComponent>
     var sortedAndDeuplicatedKeys = widget.spec["config"]["metrics"]
         .toSet()
         .toList()
-        .map((metric) => metric.replaceAll("system/", "system."));
+        .map((metric) => metric.replaceAll("system/", "system."))
+        .take(50);
 
     var isAnyDataAvailableForKeys = false;
 
@@ -393,6 +424,7 @@ class _ChartComponentState extends State<ChartComponent>
         keyFn: (dynamic row, _) =>
             ((row[widget.xAxis] ?? row["_runtime"]) + "_" + metric),
         id: metric,
+
         colorFn: (_, __) => _getColorForMetric(metric),
         // Implement this method
         domainFn: (dynamic row, currentIndex) {
@@ -462,25 +494,27 @@ class _ChartComponentState extends State<ChartComponent>
     }).toList();
   }
 
-  List<charts.RangeAnnotationSegment<Object>> getRangeAnnotations(List<dynamic> slicedHistory) {
+  List<charts.RangeAnnotationSegment<Object>> getRangeAnnotations(
+      List<dynamic> slicedHistory) {
     if (lastSeenDomain != null) {
       var isLastSeenAnnotable = false;
       var expedLastSeenDomain = lastSeenDomain!;
-      var foundIndex = slicedHistory.indexWhere((element) {
+      var smallestStep = slicedHistory.reversed.where((element) {
         var domain = element[widget.xAxis] ?? element["_runtime"];
-        return expedLastSeenDomain <= domain;
-      });
-      var lastStep = ((slicedHistory.map((e)=>e["_step"]).where((e)=>(e != null))).toList()..sort((a,b)=>a.compareTo(b))).lastOrNull;
-      if (lastStep != null) {
-        if (foundIndex >= 0) {
-          var diffLen = slicedHistory.length - foundIndex;
-          if (diffLen < 2) {
-            return [];
-          }
+        return expedLastSeenDomain >= domain;
+      }).firstOrNull;
+      var lastStep = ((slicedHistory
+              .map((e) => e["_step"])
+              .where((e) => (e != null))).toList()
+            ..sort((a, b) => a.compareTo(b)))
+          .lastOrNull;
+      if (lastStep != null && smallestStep!=null) {
+        var smallestStepDomain = smallestStep[widget.xAxis] ?? smallestStep["_runtime"];
+        if(lastStep>smallestStepDomain) {
           return [
             new charts.RangeAnnotationSegment(
-                expedLastSeenDomain,
-                lastStep + 1,//+ ((lastStep - expedLastSeenDomain) * 0.2),
+                smallestStepDomain,
+                lastStep, //+ ((lastStep - expedLastSeenDomain) * 0.2),
                 charts.RangeAnnotationAxisType.domain,
                 endLabel: 'new',
                 labelStyleSpec: charts.TextStyleSpec(
@@ -489,7 +523,11 @@ class _ChartComponentState extends State<ChartComponent>
                     color: charts.MaterialPalette.pink.shadeDefault),
                 labelAnchor: charts.AnnotationLabelAnchor.end,
                 color:
-                    charts.Color.fromHex(code: "#E91E63").darker.darker.darker,
+                charts.Color
+                    .fromHex(code: "#E91E63")
+                    .darker
+                    .darker
+                    .darker,
                 // Override the default vertical direction for domain labels.
                 labelDirection: charts.AnnotationLabelDirection.horizontal),
           ];
@@ -504,163 +542,247 @@ class _ChartComponentState extends State<ChartComponent>
     // Determine the start index for slicing the history data
 
     // TODO: implement build
-    if (widget.spec.containsKey("viewType") &&
-        widget.spec["viewType"] == "Run History Line Plot" &&
-        isLoaded) {
+    if (isChartValid && isLoaded) {
       var (isAnyDataAvailable, seriesList) = _createSeriesList(slicedHistory);
       if (!isAnyDataAvailable) {
+        if (slicedHistory.length > 0) {
+          return Container();
+        }
         return Container();
       }
-      return Container(
-          width: double.infinity,
-          margin: EdgeInsets.all(10),
-          height: double.infinity,
-          padding: (widget.isBordered) ? EdgeInsets.all(15) : null,
-          decoration: (widget.isBordered)
-              ? BoxDecoration(
-                  border: Border.all(
-                    color: Colors.white.withOpacity(0.2),
-                    width: 2.0,
-                  ),
-                  borderRadius: BorderRadius.circular(10))
-              : null,
-          constraints: BoxConstraints(
-            maxHeight: 350,
-            // maxWidth: double.infinity,
-          ),
-          child: Stack(
-            children: [
-              charts.LineChart(
-                seriesList,
-                //  animate: true,
-                defaultRenderer: charts.LineRendererConfig(
-                  includeArea: false,
-                  stacked: false,
-                  strokeWidthPx: 1.0,
+      return VisibilityDetector(key: ValueKey(widget.visibilityKey), onVisibilityChanged: (VisibilityInfo info) {
+        if(info.visibleFraction == 0){
+          paused = true;
+        }else{
+          paused = false;
+        }
+      },
+      child: Container(
+        padding: (widget.isBordered) ? const EdgeInsets.all(15) : null,
+        decoration: (widget.isBordered)
+            ? BoxDecoration(
+            border: Border.all(
+              color: Colors.white.withOpacity(0.2),
+              width: 2.0,
+            ),
+            borderRadius: BorderRadius.circular(10))
+            : null,
+        width: double.infinity,
+        margin: const EdgeInsets.all(10),
+        constraints: BoxConstraints(
+          maxHeight: 350,
+        ),
+        height: double.infinity,
+        child: Column(
+          children: [
+            Expanded(child:
+            Container(
+                width: double.infinity,
 
-                  // layoutPaintOrder: charts.LayoutViewPaintOrder.point + 1,
-                ),
-                animate: false,
-                primaryMeasureAxis: charts.NumericAxisSpec(
-                  showAxisLine: true,
-                  tickFormatterSpec:
-                      charts.BasicNumericTickFormatterSpec(_formatLargeNumber),
-                  viewport: ((bounds["min"] is num && bounds["max"] is num) &&
-                          (bounds["min"] < bounds["max"]))
-                      ? charts.NumericExtents(bounds["min"]!, bounds["max"]!)
-                      : null,
-                  tickProviderSpec: const charts.BasicNumericTickProviderSpec(
-                    desiredTickCount: 7,
-                    dataIsInWholeNumbers: false,
+                height: double.infinity,
+
+                child: charts.LineChart(
+                  seriesList,
+
+                  //  animate: true,
+                  defaultRenderer: charts.LineRendererConfig(
+                    includeArea: false,
+                    stacked: false,
+                    strokeWidthPx: 1.0,
+
+                    roundEndCaps: true,
+
+                    // layoutPaintOrder: charts.LayoutViewPaintOrder.point + 1,
                   ),
-                  renderSpec: charts.GridlineRendererSpec(
-                    labelRotation: 270,
-                    labelOffsetFromAxisPx: 13,
-                    axisLineStyle: charts.LineStyleSpec(
-                      color: charts.MaterialPalette.gray.shade800,
+                  animate: false,
+                  primaryMeasureAxis: charts.NumericAxisSpec(
+                    showAxisLine: true,
+                    tickFormatterSpec: charts.BasicNumericTickFormatterSpec(
+                        _formatLargeNumber),
+                    viewport:
+                    ((bounds["min"] is num && bounds["max"] is num) &&
+                        (bounds["min"] < bounds["max"]))
+                        ? charts.NumericExtents(
+                        bounds["min"]!, bounds["max"]!)
+                        : null,
+                    tickProviderSpec:
+                    const charts.BasicNumericTickProviderSpec(
+                      desiredTickCount: 5,
+                      dataIsInWholeNumbers: false,
                     ),
-                    labelStyle: charts.TextStyleSpec(
-                      fontSize: 10,
-                      color: charts.MaterialPalette.white,
-                    ),
-                    lineStyle: charts.LineStyleSpec(
-                      color: charts.MaterialPalette.gray.shade800,
-                    ),
-                  ),
-                ),
-                domainAxis: charts.NumericAxisSpec(
-                  showAxisLine: true,
-                  tickFormatterSpec:
-                      charts.BasicNumericTickFormatterSpec(_formatDomainAxis),
-                  //viewport: charts.NumericExtents(xbounds["min"]!, xbounds["max"]!),
-                  viewport: ((xbounds["min"] is num && xbounds["max"] is num) &&
-                          (xbounds["min"] < xbounds["max"]))
-                      ? charts.NumericExtents(xbounds["min"]!,
-                          xbounds["max"]! + (xbounds["max"]! * 0.0001))
-                      : null,
-                  tickProviderSpec: const charts.BasicNumericTickProviderSpec(
-                    desiredTickCount: 8,
-                    dataIsInWholeNumbers: false,
-                    //   dataIsInWholeNumbers: true,
-                  ),
-                  renderSpec: charts.GridlineRendererSpec(
-                    axisLineStyle: charts.LineStyleSpec(
-                      color: charts.MaterialPalette.gray.shade800,
-                    ),
-                    labelStyle: const charts.TextStyleSpec(
+                    renderSpec: charts.GridlineRendererSpec(
+                      labelRotation: 270,
+                      labelOffsetFromAxisPx: 13,
+                      axisLineStyle: charts.LineStyleSpec(
+                        color: charts.MaterialPalette.gray.shade800,
+                      ),
+                      labelStyle: charts.TextStyleSpec(
                         fontSize: 10,
                         color: charts.MaterialPalette.white,
-                        fontWeight: "500"),
-                    lineStyle: charts.LineStyleSpec(
-                      color: charts.MaterialPalette.gray.shade800,
+                      ),
+                      lineStyle: charts.LineStyleSpec(
+                        color: charts.MaterialPalette.gray.shade800,
+                      ),
                     ),
                   ),
-                  //logScale: spec["config"]["xLogScale"] ?? false,
-                ),
-                layoutConfig: charts.LayoutConfig(
-                  leftMarginSpec: charts.MarginSpec.fixedPixel(10),
-                  topMarginSpec: charts.MarginSpec.fixedPixel(10),
-                  rightMarginSpec: charts.MarginSpec.fixedPixel(10),
-                  bottomMarginSpec: charts.MarginSpec.fixedPixel(10),
-                ),
-                behaviors: [
-                  new charts.RangeAnnotation(
-                      [...getRangeAnnotations(slicedHistory)]),
-                  charts.ChartTitle("Step",
-                      titleStyleSpec: const charts.TextStyleSpec(
+                  domainAxis: charts.NumericAxisSpec(
+                    showAxisLine: true,
+                    tickFormatterSpec: charts.BasicNumericTickFormatterSpec(
+                        _formatDomainAxis),
+                    //viewport: charts.NumericExtents(xbounds["min"]!, xbounds["max"]!),
+                    viewport: ((xbounds["min"] is num &&
+                        xbounds["max"] is num) &&
+                        (xbounds["min"] < xbounds["max"]))
+                        ? charts.NumericExtents(xbounds["min"]!,
+                        xbounds["max"]! + (xbounds["max"]! * 0.0001))
+                        : null,
+                    tickProviderSpec:
+                    const charts.BasicNumericTickProviderSpec(
+                      desiredTickCount: 6,
+                      dataIsInWholeNumbers: false,
+                      //   dataIsInWholeNumbers: true,
+                    ),
+                    renderSpec: charts.GridlineRendererSpec(
+                      axisLineStyle: charts.LineStyleSpec(
+                        color: charts.MaterialPalette.gray.shade800,
+                      ),
+                      labelStyle: const charts.TextStyleSpec(
                           fontSize: 10,
-                          fontWeight: "bold",
-                          lineHeight: 2.0,
-                          color: charts.MaterialPalette.white),
-                      behaviorPosition: charts.BehaviorPosition.bottom,
-                      // titlePadding: 10,
-                      titleOutsideJustification:
-                          charts.OutsideJustification.middleDrawArea),
-                  // charts.ChartTitle(
-                  //     spec["config"]["metrics"].join(", "),
-                  //     titleStyleSpec: charts.TextStyleSpec(fontSize: 10),
-                  // ),
-                  charts.SeriesLegend(
-                    position: charts.BehaviorPosition.top,
-                    horizontalFirst: false,
-                    desiredMaxRows: 2,
-                    cellPadding: EdgeInsets.only(right: 4.0, bottom: 4.0),
-                    entryTextStyle: charts.TextStyleSpec(
-                        color: charts.MaterialPalette.white, fontSize: 10),
+                          color: charts.MaterialPalette.white,
+                          fontWeight: "500"),
+                      lineStyle: charts.LineStyleSpec(
+                        color: charts.MaterialPalette.gray.shade800,
+                      ),
+                    ),
+                    //logScale: spec["config"]["xLogScale"] ?? false,
                   ),
-                  //charts.PanAndZoomBehavior(),
-                  charts.SelectNearest(
-                    eventTrigger: charts.SelectionTrigger.tapAndDrag,
-                    selectAcrossAllDrawAreaComponents: true,
+                  layoutConfig: charts.LayoutConfig(
+                    leftMarginSpec: charts.MarginSpec.fixedPixel(10),
+                    topMarginSpec: charts.MarginSpec.fixedPixel(10),
+                    rightMarginSpec: charts.MarginSpec.fixedPixel(10),
+                    bottomMarginSpec: charts.MarginSpec.fixedPixel(10),
                   ),
-                  // charts.DomainHighlighter(
-                  //   charts.SelectionModelType.info
-                  // ),
-                  charts.LinePointHighlighter(
-                      selectionModelType: charts.SelectionModelType.info,
-                      showHorizontalFollowLine:
-                          charts.LinePointHighlighterFollowLineType.nearest,
-                      showVerticalFollowLine:
-                          charts.LinePointHighlighterFollowLineType.nearest),
-                ],
-                selectionModels: [
-                  charts.SelectionModelConfig(
-                    type: charts.SelectionModelType.info,
-                    changedListener: (charts.SelectionModel model) {
-                      widget.onPressed(
-                          model,
-                          widget.spec["config"]["metrics"]
-                              .toSet()
-                              .toList()
-                              .map((metric) =>
-                                  metric.replaceAll("system/", "system."))
-                              .toList());
-                    },
-                  )
-                ],
-              ),
-            ],
-          ));
+                  behaviors: [
+                    new charts.RangeAnnotation(
+                        [...getRangeAnnotations(slicedHistory)]),
+                    charts.ChartTitle("Step",
+                        titleStyleSpec: const charts.TextStyleSpec(
+                            fontSize: 10,
+                            fontWeight: "bold",
+                            lineHeight: 2.0,
+                            color: charts.MaterialPalette.white),
+                        behaviorPosition: charts.BehaviorPosition.bottom,
+                        // titlePadding: 10,
+                        titleOutsideJustification:
+                        charts.OutsideJustification.middleDrawArea),
+                    // charts.ChartTitle(
+                    //     spec["config"]["metrics"].join(", "),
+                    //     titleStyleSpec: charts.TextStyleSpec(fontSize: 10),
+                    // ),
+                    charts.SeriesLegend(
+                      position: charts.BehaviorPosition.top,
+                      horizontalFirst: false,
+                      desiredMaxRows: 2,
+                      cellPadding: EdgeInsets.only(right: 4.0, bottom: 4.0),
+                      entryTextStyle: charts.TextStyleSpec(
+                          color: charts.MaterialPalette.white,
+                          fontSize: 10),
+                    ),
+                    //charts.PanAndZoomBehavior(),
+                    charts.SelectNearest(
+                      eventTrigger: charts.SelectionTrigger.tapAndDrag,
+                      selectAcrossAllDrawAreaComponents: true,
+                    ),
+                    // charts.DomainHighlighter(
+                    //   charts.SelectionModelType.info
+                    // ),
+                    charts.LinePointHighlighter(
+                        selectionModelType: charts.SelectionModelType.info,
+                        showHorizontalFollowLine: charts
+                            .LinePointHighlighterFollowLineType.nearest,
+                        showVerticalFollowLine: charts
+                            .LinePointHighlighterFollowLineType.nearest),
+                  ],
+                  selectionModels: [
+                    charts.SelectionModelConfig(
+                      type: charts.SelectionModelType.info,
+                      changedListener: (charts.SelectionModel model) {
+                        widget.onPressed(
+                            model,
+                            widget.spec["config"]["metrics"]
+                                .toSet()
+                                .toList()
+                                .map((metric) =>
+                                metric.replaceAll("system/", "system."))
+                                .toList());
+                      },
+                    )
+                  ],
+                )
+            )),
+            if(widget.showLastValues)
+              Container(
+                  width: double.infinity,
+                  margin: EdgeInsets.only(top: 10),
+                  child:
+                  SingleChildScrollView(
+
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+
+                      children: [
+
+                        ...widget.spec["config"]["metrics"].toSet()
+                            .toList()
+                            .map((metric) => metric.replaceAll("system/", "system."))
+                            .toList()
+                            .take(10)
+                            .map((key) {
+                          var lastValues = slicedHistory.last;
+                          var valNum = lastValues[key];
+                          var value = valNum?.toString();
+                          if(valNum != null && value != null){
+                            if(value.split(".").length > 1){
+                              value = valNum.toStringAsPrecision(3);
+                            }else{
+                              value = value.toString();
+                            }
+                          }
+
+
+                          var dartColor = seedToColor(key);
+                          return Container(
+                            margin: EdgeInsets.only(right: 5),
+                            decoration: BoxDecoration(
+                                color: dartColor,
+                                borderRadius: BorderRadius.circular(6)
+                            ),
+                            padding: EdgeInsets.symmetric(vertical: 4, horizontal: 6),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.start,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(key, style: TextStyle(
+                                    fontSize: 6,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white.withOpacity(0.8)
+                                ),),
+                                Text(value ?? "NONE", style: TextStyle(
+                                    fontSize: 8,
+                                    fontWeight: FontWeight.w900,
+                                    color: Colors.white
+                                ),),
+                              ],
+                            ),
+                          );
+                        }).toList()
+                      ],
+                    ),
+                  )),
+            //Text(deExpIt(lastSeenDomain ?? 1.0).toString()+" - "+deExpIt(slicedHistory.lastOrNull?["_step"] ?? 1.0).toString())
+          ],
+        ),
+      ));
     } else {
       return Container();
     }
