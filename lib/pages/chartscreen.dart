@@ -134,14 +134,17 @@ class _ChartScreenPageState extends State<ChartScreenPage> {
                         (datumPair.datum as Map).forEach(
                                 (key, value) {
                               if (value is num){
-                                if(key == "_runtime" || key == "_step"){
-                                  _values[key] = (deExpIt(value)).floor() as num;
-                                }else{
-                                  if (metrics.contains(key)){
-                                    _values[key] = (exp(value)-1) as num;
+                                  if (metrics.contains(key) || (key == "_runtime" || key == "_step")) {
+                                    _values[key] = ((key == "_runtime" || key == "_step") ? value.toInt(): value);
                                   }
-
-                                }
+                                // if(key == "_runtime" || key == "_step"){
+                                //   _values[key] = (deExpIt(value)).floor() as num;
+                                // }else{
+                                //   if (metrics.contains(key)){
+                                //     _values[key] = (exp(value)-1) as num;
+                                //   }
+                                //
+                                // }
 
                               }
                             }
@@ -172,14 +175,17 @@ class _ChartScreenPageState extends State<ChartScreenPage> {
 
                                 (key, value) {
                               if (value is num){
-                                if(key == "_runtime" || key == "_step"){
-                                  _values[key] = (deExpIt(value)).floor() as num;
-                                }else{
-                                  if (metrics.contains(key)){
-                                    _values[key] = (exp(value)-1) as num;
+                                  if (metrics.contains(key) || (key == "_runtime" || key == "_step")) {
+                                    _values[key] = (key == "_runtime" || key == "_step") ? value.toInt() : value;
                                   }
-
-                                }
+                                // if(key == "_runtime" || key == "_step"){
+                                //   (deExpIt(value)).floor() as num;
+                                // }else{
+                                //   if (metrics.contains(key)){
+                                //     _values[key] = (exp(value)-1) as num;
+                                //   }
+                                //
+                                // }
 
 
                               }
@@ -223,6 +229,7 @@ class _ChartScreenPageState extends State<ChartScreenPage> {
                             ...lastValues.keys
                                 .map((key) {
                               var valNum = lastValues[key];
+                              //valNum = expIt(valNum!).toDouble();
                               var value = valNum?.toString();
                               if(valNum != null && value != null){
                                 if(value.split(".").length > 1){

@@ -6,6 +6,7 @@ import 'package:get/get.dart';
 import 'package:get/get_core/src/get_main.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 import 'package:wandview/components/chart.dart';
+import 'package:wandview/components/mediabrowser.dart';
 
 import '../utils/controllers.dart';
 class ChartsPage extends StatefulWidget {
@@ -53,15 +54,66 @@ class _ChartsPageState extends State<ChartsPage> {
   late dynamic spec;
   late dynamic panelBankConfig;
   var lastUpdatedDuration = (null as Duration?).obs;
+
+
+  int sortSections( a, b){
+    // if a section contains panels with Run History Line Plot, it should be first
+    // if a section contains panels with Media Browser, it should be second
+    // if a section contains panels with both, it should be first
+    // if a section is System, it should be last
+    var aHasChart = a["panels"].where((panel){
+      return panel.containsKey("viewType") &&
+          panel["viewType"] == "Run History Line Plot";
+    }).length > 0;
+    var aHasMedia = a["panels"].where((panel){
+      return panel.containsKey("viewType") &&
+          panel["viewType"] == "Media Browser";
+    }).length > 0;
+    var bHasChart = b["panels"].where((panel){
+      return panel.containsKey("viewType") &&
+          panel["viewType"] == "Run History Line Plot";
+    }).length > 0;
+    var bHasMedia = b["panels"].where((panel){
+      return panel.containsKey("viewType") &&
+          panel["viewType"] == "Media Browser";
+    }).length > 0;
+    var aIsSystem = a["name"] == "System";
+    var bIsSystem = b["name"] == "System";
+    if(aIsSystem && !bIsSystem){
+      return 1;
+    }
+    if(!aIsSystem && bIsSystem){
+      return -1;
+    }
+    if(aHasChart && !bHasChart){
+      return -1;
+    }
+    if(!aHasChart && bHasChart){
+      return 1;
+    }
+    if(aHasMedia && !bHasMedia){
+      return -1;
+    }
+    if(!aHasMedia && bHasMedia){
+      return 1;
+    }
+    return 0;
+  }
   @override
   void initState() {
     super.initState();
     appController.clearHistory();
 
 
+
     this.chartId = Get.arguments[0];
     this.run = appController.runs.firstWhere((element) => element["id"] == chartId);
-    this.chartInfo  = appController.chartInfo[this.run["project"]["id"]][0];
+    var chartInfos = appController.chartInfo[this.run["project"]["id"]];
+    if(chartInfos.length < 1){
+      terminated = true;
+      return;
+    }
+    this.chartInfo  = chartInfos[0];
     this.spec = this.chartInfo["spec"];
     this.panelBankConfig = this.spec["panelBankConfig"];
 
@@ -69,10 +121,15 @@ class _ChartsPageState extends State<ChartsPage> {
       return section["panels"].where((panel){
 
         return  panel.containsKey("viewType") &&
-            panel["viewType"] == "Run History Line Plot" &&
-            (panel["config"]["metrics"] != null);
+            (
+                panel["viewType"] == "Run History Line Plot" ||
+                    panel["viewType"] == "Media Browser"
+            ) &&
+            ((panel["config"]["metrics"] != null)
+            || (panel["config"]["mediaKeys"] != null && panel["config"]["mediaKeys"].length > 0)
+            );
       }).length > 0;
-    }).toList();
+    }).toList()..sort(sortSections);
     historySubscription = appController.runHistory.listen((slicedHistory) {
       var validSectionNames = <String>{};
       for (var section in this.sections) {
@@ -82,14 +139,33 @@ class _ChartsPageState extends State<ChartsPage> {
           var panels = section["panels"];
           for (var panel in panels){
             if(panel.containsKey("viewType") &&
-                panel["viewType"] == "Run History Line Plot" &&
-                (panel["config"]["metrics"] != null)){
-              var sortedAndDeuplicatedKeys = panel["config"]["metrics"]
+                (
+                    panel["viewType"] == "Run History Line Plot" ||
+                        panel["viewType"] == "Media Browser"
+                ) &&
+                (
+                    (panel["config"]["metrics"] != null) ||
+                        (
+                            (panel["config"]["mediaKeys"] != null)
+                        && (panel["config"]["mediaKeys"].length > 0)
+                        )
+                )){
+              var keys = panel["config"]["metrics"] ?? panel["config"]["mediaKeys"];
+              var sortedAndDeuplicatedKeys = keys
                   .toSet()
                   .toList()
                   .map((metric) => metric.replaceAll("system/", "system.") )
                   .toList();
-              if(slicedHistory.any((hist) =>sortedAndDeuplicatedKeys.any((key) => hist.containsKey(key)))){
+              var isAvailable = false;
+              for (var hist in slicedHistory){
+                for (var key in sortedAndDeuplicatedKeys){
+                  if(hist.containsKey(key) && hist[key]!=null){
+                    isAvailable = true;
+                    break;
+                  }
+                }
+              }
+              if(isAvailable){
                 validSectionNames.add(section["name"]);
               }
             }
@@ -108,7 +184,7 @@ class _ChartsPageState extends State<ChartsPage> {
       if(validSectionNames != oldSelNames){
         if(this.mounted && !this.terminated){
           setState(() {
-            sections = this.sections.where((section) => validSectionNames.contains(section["name"])).toList();
+            sections = this.sections.where((section) => validSectionNames.contains(section["name"])).toList()..sort(sortSections);
           });
         }
 
@@ -308,38 +384,78 @@ class _ChartsPageState extends State<ChartsPage> {
                     itemBuilder: (context,index){
                     var panel = section["panels"][index];
                     final xAxis = panel["xAxis"] ?? sectionWideXAis ?? (isSystemMetrics ? "_runtime" : "_step");
-                    return  GestureDetector(
-                        onTap: (){
-                          Get.toNamed("/chartScreen", arguments: [
-                            chartId,
-                            panel,
-                            xAxis,
-                            section,
-                            isSystemMetrics
-                          ]);
+                    var isChart = panel["viewType"] == "Run History Line Plot";
+                    var isMedia = panel["viewType"] == "Media Browser";
+                    if(!isChart && !isMedia){
+                      return Container();
+                    }
+                    if(isMedia){
+                      return MediaBrowserComponent(
+                        run: this.run,
+                        mediasPath: "https://wandb.ai/${
+                            this.run["project"]["entityName"]
+                        }/${
+                            this.run["project"]["name"]
+                        }/runs/${this.run["name"]}/files/",
+                        visibilityKey: "ChartComponentVis" +
+                            section["name"] + panel["__id__"] + xAxis,
+                        isBordered: true,
+                        showLastValues: true,
+                        runName: run["name"],
+                        key: Key("Render" + section["name"] +
+                            panel["__id__"] + xAxis),
+                        historyWatchable: isSystemMetrics
+                            ? appController.systemMetrics
+                            : appController.runHistory,
+                        spec: panel,
+                        xAxis: xAxis,
+                        onPressed: (model, metrics) {
+
                         },
-                        child:Container(
-                          width: double.infinity,
+                        lastValuesReport: (lastValues, metrics) {
+                          print(lastValues);
+                        },
+                      );
+                    }
+                    if(isChart) {
+                      return GestureDetector(
+                          onTap: () {
+                            Get.toNamed("/chartScreen", arguments: [
+                              chartId,
+                              panel,
+                              xAxis,
+                              section,
+                              isSystemMetrics
+                            ]);
+                          },
+                          child: Container(
+                            width: double.infinity,
 
-                          child: AbsorbPointer(
-                              absorbing: true,
-                              child:ChartComponent(
-                                visibilityKey: "ChartComponentVis"+section["name"]+panel["__id__"]+xAxis,
-                                isBordered: true,
-                                showLastValues: true,
-                                runName: run["name"],
-                                key: Key("Render"+section["name"]+panel["__id__"]+xAxis),
-                                historyWatchable:  isSystemMetrics ? appController.systemMetrics : appController.runHistory,
-                                spec: panel,
-                                xAxis: xAxis,
-                                onPressed: (model,metrics){
+                            child: AbsorbPointer(
+                                absorbing: true,
+                                child: ChartComponent(
+                                  visibilityKey: "ChartComponentVis" +
+                                      section["name"] + panel["__id__"] + xAxis,
+                                  isBordered: true,
+                                  showLastValues: true,
+                                  runName: run["name"],
 
-                                },
-                                lastValuesReport: (lastValues, metrics){
-                                  print(lastValues);
-                                },
-                              )),
-                        ));
+                                  key: Key("Render" + section["name"] +
+                                      panel["__id__"] + xAxis),
+                                  historyWatchable: isSystemMetrics
+                                      ? appController.systemMetrics
+                                      : appController.runHistory,
+                                  spec: panel,
+                                  xAxis: xAxis,
+                                  onPressed: (model, metrics) {
+
+                                  },
+                                  lastValuesReport: (lastValues, metrics) {
+                                    print(lastValues);
+                                  },
+                                )),
+                          ));
+                    }
                   }, itemCount: section["panels"].length,),
                 ));
               }).toList()

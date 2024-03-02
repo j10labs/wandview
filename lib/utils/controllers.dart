@@ -72,7 +72,11 @@ class AppController extends GetxController {
 
   }
 
-
+  String authorizationToken(){
+    var unameAndPass = ["api", authObject.value!.apiKey];
+    var generatedToken ="Basic ${base64Encode(utf8.encode(unameAndPass.join(':')))}";
+    return generatedToken;
+  }
 
   authenticate() async {
     if (authObject.value==null) return "login";
@@ -184,7 +188,8 @@ class AppController extends GetxController {
   }
 
   void refreshLastSeen(runId, List<Map<String,dynamic>> finalRunHistory){
-    double? lastLoadedStep =  (finalRunHistory.map((e)=>e["_step"] ?? e["_runtime"])).lastOrNull;
+    var fn = (finalRunHistory.map((e)=>e["_step"] ?? e["_runtime"])).lastOrNull;
+    double? lastLoadedStep =  (fn != null) ? fn.toDouble() : null;
     var appSessionId = prefs.getString("appSession")!;
 
     var storedLastSeenStep = prefs.getDouble("$runId:lastSeenStep");
@@ -204,6 +209,74 @@ class AppController extends GetxController {
     }
   }
 
+
+  var fileQueryCache = <String, String>{};
+
+  Future<Map<String, String>> fileQuery(
+      {required String runId,
+        required String projectName,
+        required String entityName,
+        required List<String> filenames}) async {
+
+    final QueryOptions options = QueryOptions(
+        document: gql(r'''
+       query ($runId: String!, $filenames: [String]!, $projectName: String!, $entityName: String!) {
+          project(entityName: $entityName, name: $projectName) {
+        id
+        run(name: $runId) {
+          id
+          files(names: $filenames) {
+            edges {
+              node {
+                id
+                name
+                directUrl 
+                url(upload: false)
+                md5
+                sizeBytes
+                __typename
+              }
+              __typename
+            }
+            __typename
+          }
+          __typename
+        }
+        __typename
+        }
+
+
+         
+       }     
+        
+    '''),
+        variables: {
+          "runId": runId,
+          "projectName": projectName,
+          "entityName": entityName,
+          "filenames": filenames
+        },
+        fetchPolicy: FetchPolicy.cacheAndNetwork
+    );
+    // check if all filenames are in the cache
+    var allExist = filenames.every((element) => fileQueryCache.containsKey(element));
+    if(allExist){
+      return fileQueryCache;
+    }
+
+    var result = await client.query(options);
+
+
+    var fileMap = <String, String>{};
+    var files = result.data?["project"]["run"]["files"]["edges"];
+    for (var file in files){
+      var node = file["node"];
+      fileMap[node["name"]] = node["directUrl"] as String;
+      fileQueryCache[node["name"]] = node["directUrl"] as String;
+    }
+    return fileMap;
+
+  }
   queryLastStep(runId, projectName, entityName) async {
     final QueryOptions options = QueryOptions(
       document: gql(r'''
@@ -229,9 +302,9 @@ class AppController extends GetxController {
     var result = await client.query(options);
     try{
       var lastStep = (result.data?["project"]["run"]["historyKeys"]["lastStep"] as num? ) ?? 0;
-      return (max(0,lastStep- 80000), lastStep+1000);
+      return (max(0,lastStep- 50000), lastStep+1000);
     }catch(e){
-      return (0, 80000);
+      return (0, 50000);
     }
 
 
@@ -346,7 +419,7 @@ class AppController extends GetxController {
 
     var shouldVibrate = false;
     if (!runHistoryIsSimiliar || forceRefresh) {
-      if(!allowCache){
+      if(!allowCache && queriedHistory.length > 0){
         // vibrate the phone
 
         shouldVibrate = true;
@@ -590,6 +663,10 @@ createdAt
     };
     var [_projects, _runs] = result.parsedData as List<dynamic>;
     // if selectedProject is not "all", and it is not in the list of projects, set it to "all"
+    if(selectedProject.value == "all"){
+      var selectedProjectDefault = prefs.getString("defaultSelectedProject") ?? "all";
+      selectedProject.value = selectedProjectDefault;
+    }
     if (selectedProject.value != "all") {
       var found = false;
       for (var project in _projects) {
@@ -610,6 +687,7 @@ createdAt
 
 
   void selectProject (projectId){
+    prefs.setString("defaultSelectedProject", projectId);
     selectedProject.value=projectId;
   }
 
@@ -633,6 +711,7 @@ createdAt
      Get.offAndToNamed("/login");
 
   }
+
 
 
 

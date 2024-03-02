@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/widgets.dart';
 import 'package:get/get.dart';
 import 'package:get/get_core/src/get_main.dart';
+import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 
@@ -146,17 +147,28 @@ class LineChartPainter extends CustomPainter {
     //smoothed renderingActions
 
 
+    var minX = expIt(1).toDouble();
 
+    if (chartData.smoothedSeriesItems.length < 1){
+      return;
+    }
+
+    var maximumLengthOfSeries = chartData.smoothedSeriesItems.map((e) => e.$2.points.length).reduce(max);
+    var maxX = expIt(maximumLengthOfSeries+1).toDouble();
     if (lastSeenDomain is num ) {
       var lastSeenStepExp = lastSeenDomain!;
       if(lastSeenStepExp! != null){
         sizeXToDraw = null;
         var largestValue = 0.0;
         for (var (pnt, series) in chartData.smoothedSeriesItems) {
-           for (var point in series.points.reversed) {
+
+
+           for (var (ix,point) in series.points.indexed.toList().reversed) {
              largestValue = max(largestValue, point.x.toDouble());
              if (point.x <= lastSeenStepExp) {
-               sizeXToDraw = transform(point.x, size.width, chartData.min_x.toDouble(), chartData.max_x.toDouble(), alpha: 0.9);
+               var domainExp = expIt(ix+1);
+
+               sizeXToDraw = transform(domainExp, size.width, minX, maxX, alpha: 0.9);
                sizeXToDraw  += (size.width * 0.05);
                break;
              }
@@ -199,9 +211,14 @@ class LineChartPainter extends CustomPainter {
       var path = Path();
       var done = false;
       (num, num)? prevPoint = null;
+      // var minX = expIt(1);
+      // var maxX = expIt(_points.length+1);
+      var minY = logIt(chartData.min_y.toDouble(),chartData.min_y).toDouble();
+      var maxY = logIt(chartData.max_y.toDouble(),chartData.min_y).toDouble();
       for (var (ix, point) in _points.indexed) {
-        var x = transform(point.x, size.width, chartData.min_x.toDouble(), chartData.max_x.toDouble(), alpha: 0.9);
-        var y = transform(point.y, size.height, chartData.min_y.toDouble(), chartData.max_y.toDouble());
+
+        var x = transform(expIt(ix+1), size.width, minX.toDouble(), maxX.toDouble(), alpha: 0.9);
+        var y = transform(logIt(point.y, chartData.min_y), size.height, minY, maxY);
 
         x += (size.width * 0.05);
         y = (size.height) - y - (size.height * 0.1); //
@@ -412,6 +429,8 @@ class RunItemState extends State<RunItem> with AutomaticKeepAliveClientMixin {
 
   late SharedPreferences _prefs;
 
+
+
   void changeActiveMetrics(Set<String> activeMetrics) async {
     // save to local storage, run["id"] + "activeMetrics"
     _prefs.setStringList(run["id"] + "activeMetrics", activeMetrics.toList());
@@ -442,8 +461,13 @@ class RunItemState extends State<RunItem> with AutomaticKeepAliveClientMixin {
 
     var histKeys = <String>{};
 
-    for (var h in structuredHistory) {
-      histKeys.addAll((h).keys);
+    for (var hist in structuredHistory) {
+      for (var key in hist.keys) {
+        if(hist[key] is num){
+          histKeys.add(key);
+        }
+      }
+      // histKeys.addAll((h).keys);
     }
     histKeys = histKeys
         .where((element) =>
@@ -496,7 +520,7 @@ class RunItemState extends State<RunItem> with AutomaticKeepAliveClientMixin {
     }
     if(!paused){
       try{
-        var (metrics, systemMetrics, hasChanged) = await widget.loadHistory(
+        var vx = await widget.loadHistory(
             run["name"], run["project"]["name"], run["project"]["entityName"],
             allowCache: firstLoop,
             onProject: true,
@@ -504,66 +528,67 @@ class RunItemState extends State<RunItem> with AutomaticKeepAliveClientMixin {
             previousSystemMetrics: prevSystemMetrics
 
         );
-        if (metrics != null && (hasChanged || firstLoop)) {
-          // if (ranHistory.length > 5000) {
-          //   ranHistory = ranHistory.sublist(
-          //       ranHistory.length - 5000, ranHistory.length);
-          // }
-          print("Gotten the data:)");
 
-          this.prevMetrics = metrics;
-          this.prevSystemMetrics = systemMetrics;
-          print("Processed the data:)");
+        if (vx != null) {
+          var (metrics, systemMetrics, hasChanged) = vx;
+          if (metrics != null && (hasChanged || firstLoop)) {
+            // if (ranHistory.length > 5000) {
+            //   ranHistory = ranHistory.sublist(
+            //       ranHistory.length - 5000, ranHistory.length);
+            // }
+            print("Gotten the data:)");
 
-
-
-
-          var lastUpdate = this.prevMetrics.lastOrNull;
+            this.prevMetrics = metrics;
+            this.prevSystemMetrics = systemMetrics;
+            print("Processed the data:)");
 
 
-          if(firstLoop){
-            var vals =  postFirstLoad(this.prevMetrics);
-            print("Post-Processed the data:)");
-            activeMetrics = vals[0];
-
-            histKeys = vals[2];
-            histColors = vals[3];
-          }
-
-          print("Will compute the data:)");
-          var _chartData= await compute(prepareChartData,PrepareChartInput(histKeys: histKeys,
-              histColors: histColors,
-              metrics: this.prevMetrics,
-              activeMetrics: activeMetrics));
-
-          print("Computed the data:)");
-          if(this.mounted){
-            setState(() {
-              this.chartData = _chartData;
-
-              this.activeMetrics = activeMetrics;
-              this.histKeys = histKeys;
-              this.histColors = histColors;
-              if(firstLoop){
-                isLoading = false;
+            var lastUpdate = this.prevMetrics.lastOrNull;
 
 
-              }
-              if(lastUpdate != null){
-                double? timestamp = lastUpdate["l___timestamp"] ?? lastUpdate["_timestamp"];
-                if(timestamp != null){
-                  this.lastUpdatedDuration =DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(timestamp.toInt() * 1000));
+            if (firstLoop) {
+              var vals = postFirstLoad(this.prevMetrics);
+              print("Post-Processed the data:)");
+              activeMetrics = vals[0];
+
+              histKeys = vals[2];
+              histColors = vals[3];
+            }
+
+            print("Will compute the data:)");
+            var _chartData = await compute(
+                prepareChartData, PrepareChartInput(histKeys: histKeys,
+                histColors: histColors,
+                metrics: this.prevMetrics,
+                activeMetrics: activeMetrics));
+
+            print("Computed the data:)");
+            if (this.mounted) {
+              setState(() {
+                this.chartData = _chartData;
+
+                this.activeMetrics = activeMetrics;
+                this.histKeys = histKeys;
+                this.histColors = histColors;
+                if (firstLoop) {
+                  isLoading = false;
                 }
-
-              }
-            });
-            // force a repaint
-          }
-
-        } else {
-          if(!hasChanged){
-            print("No change in data");
-
+                if (lastUpdate != null) {
+                  double? timestamp = lastUpdate["l___timestamp"] ??
+                      lastUpdate["_timestamp"];
+                  if (timestamp != null) {
+                    this.lastUpdatedDuration = DateTime.now().difference(
+                        DateTime.fromMillisecondsSinceEpoch(
+                            timestamp.toInt() * 1000));
+                  }
+                }
+              });
+              // force a repaint
+            }
+          } else {
+            if (!hasChanged) {
+              print("No change in data");
+            }
           }
         }
       }catch( e, trace){
@@ -872,11 +897,32 @@ class RunItemState extends State<RunItem> with AutomaticKeepAliveClientMixin {
 }
 
 class HomePage extends StatelessWidget {
-  HomePage({super.key});
+  var idInitialIndex = 0.obs;
+  HomePage({super.key}){
+    var _listener = null;
+    var vl = (v, {cancel = true}) {
+      print("Selected project changed");
+
+      var selectedProjectId= appController.selectedProject.value;
+      // animate to scroll to  project[ "id"]
+      var selectedProjectIndex = appController.projects.indexWhere((element) => element["id"] == selectedProjectId);
+      if(selectedProjectIndex > -1){
+        //scrollViewController.jumpTo(index: selectedProjectIndex);
+        idInitialIndex.value = selectedProjectIndex;
+
+      }
+    };
+    _listener= appController.selectedProject.listen(vl);
+
+    vl(appController.selectedProject.value, cancel: false);
+
+  }
 
   final appController = Get.find<AppController>();
 
   get loadHistory => appController.loadHistory;
+  var scrollViewController = ItemScrollController();
+
 
   @override
   Widget build(BuildContext context) {
@@ -909,6 +955,7 @@ class HomePage extends StatelessWidget {
                                           .loadRunsAndProjects();
                                     },
                                     child: SingleChildScrollView(
+
                                         physics:
                                         AlwaysScrollableScrollPhysics(),
                                         child: Container(
@@ -916,64 +963,62 @@ class HomePage extends StatelessWidget {
                                           height: constraint.maxHeight,
                                           child: Column(
                                             children: [
-                                              SizedBox(
+                                              Container(
                                                 width: double.infinity,
-                                                child: SingleChildScrollView(
+                                                height: 65,
+                                                child: ScrollablePositionedList.builder(
+
+                                                  itemScrollController: scrollViewController,
+                                                  itemCount: appController
+                                                      .projects.length,
                                                   padding: EdgeInsets.only(
                                                       left: 10, right: 15),
+          initialScrollIndex: idInitialIndex.value,
                                                   scrollDirection:
                                                   Axis.horizontal,
-                                                  child:  Row(
-                                                    children: [
-                                                      ...appController
-                                                          .projects
-                                                          .map((project) {
-                                                            var selected = appController.selectedProject.value ==
-                                                                project[
-                                                                "id"];
-                                                        return Container(
-                                                          key: Key(
-                                                              project[
-                                                              "id"]),
-                                                          margin: const EdgeInsets
-                                                              .symmetric(
-                                                              horizontal:
-                                                              5,
-                                                              vertical:
-                                                              10),
-                                                          child:
-                                                          ElevatedButton(
-                                                            onPressed:
-                                                                () {
-                                                              appController
-                                                                  .selectProject(
-                                                                  project["id"]);
-                                                            },
 
-                                                            style:
-                                                            ButtonStyle(
-                                                              side: MaterialStateProperty.all<BorderSide>(
-                                                                  BorderSide(width: 1.0, color:selected ? Colors.blueAccent : Colors.white.withOpacity(0.5))),
-                                                              padding:MaterialStateProperty.all<EdgeInsets>(
-                                                                  EdgeInsets.symmetric(vertical: 5, horizontal: 15)),
-                                                              backgroundColor: MaterialStateProperty.all(
-                                                                  selected? Colors.blueAccent
-                                                                  : Colors.white.withOpacity(0.1)),
-                                                              foregroundColor: MaterialStateProperty.all(selected
-                                                                  ? Colors
-                                                                  .white
-                                                                  : Colors
-                                                                  .white),
+                                                  itemBuilder: (context, index) {
+                                                    var project = appController
+                                                        .projects[index];
+                                                    var selected = appController
+                                                        .selectedProject.value ==
+                                                        project["id"];
+                                                    return Container(
+                                                      key: Key(
+                                                          "projectItem"+ project[
+                                                          "id"]),
+                                                      margin: const EdgeInsets
+                                                          .symmetric(
+                                                          horizontal: 5,
+                                                          vertical: 10),
+                                                      child: ElevatedButton(
+                                                        onPressed: () {
+                                                          appController
+                                                              .selectProject(
+                                                              project["id"]);
+                                                        },
+                                                        style: ButtonStyle(
+                                                          side: MaterialStateProperty.all<BorderSide>(
+                                                              BorderSide(width: 1.0, color:selected ? Colors.blueAccent : Colors.white.withOpacity(0.5))),
+                                                          padding:MaterialStateProperty.all<EdgeInsets>(
+                                                              EdgeInsets.symmetric(vertical: 5, horizontal: 15)),
+                                                          backgroundColor: MaterialStateProperty.all(
+                                                              selected? Colors.blueAccent
+                                                              : Colors.white.withOpacity(0.1)),
+                                                          foregroundColor: MaterialStateProperty.all(selected
+                                                              ? Colors
+                                                              .white
+                                                              : Colors
+                                                              .white),
 
-                                                            ),
-                                                            child: Text(
-                                                                project[
-                                                                "name"]),
-                                                          ),
-                                                        );
-                                                      }).toList()
-                                                    ],
-                                                  ),
+                                                        ),
+                                                        child: Text(
+                                                            project[
+                                                            "name"]),
+                                                      ),
+                                                    );
+                                                  },
+
                                                 ),
                                               ),
                                               if (runs.length > 0)

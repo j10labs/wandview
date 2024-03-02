@@ -13,49 +13,6 @@ import 'package:wandview/utils/utilities.dart';
 
 import '../utils/controllers.dart';
 
-List<Point> applyGaussianSmoothing(List<Point> inputSeries,
-    {double sigma = 2.0, int kernelSize = 2}) {
-  //return inputSeries;
-  // Adjusted default values
-  // Ensure kernel size is odd
-  if (kernelSize % 2 == 0) {
-    kernelSize += 1;
-  }
-
-  // Generate Gaussian kernel
-  List<double> kernel = List.filled(kernelSize, 0);
-  int mid = kernelSize ~/ 2;
-  double sum = 0.0;
-
-  for (int i = 0; i < kernelSize; i++) {
-    kernel[i] = exp(-0.5 * pow((i - mid) / sigma, 2));
-    sum += kernel[i];
-  }
-
-  // Normalize the kernel
-  for (int i = 0; i < kernelSize; i++) {
-    kernel[i] /= sum;
-  }
-
-  // Apply Gaussian smoothing only to y values
-  List<Point> smoothedSeries = [];
-  for (int i = 0; i < inputSeries.length; i++) {
-    double smoothedY = 0.0;
-
-    for (int j = 0; j < kernelSize; j++) {
-      int index = i - mid + j;
-      if (index >= 0 && index < inputSeries.length) {
-        smoothedY += inputSeries[index].y * kernel[j];
-      }
-    }
-
-    smoothedSeries
-        .add(Point(inputSeries[i].x, smoothedY)); // Keep x value unchanged
-  }
-
-  return smoothedSeries;
-}
-
 class ChartComponent extends StatefulWidget {
   final int maxHistoryLength;
   final String xAxis;
@@ -154,9 +111,15 @@ class _ChartComponentState extends State<ChartComponent>
   }
 
   get isChartValid {
+
     return widget.spec.containsKey("viewType") &&
-        widget.spec["viewType"] == "Run History Line Plot" &&
-        (widget.spec["config"]["metrics"] != null);
+        (widget.spec["viewType"] == "Run History Line Plot"
+        || widget.spec["viewType"] == "Media Browser"
+        ) &&
+        (
+            (widget.spec["config"]["metrics"] != null)
+            || ((widget.spec["config"]["mediaKeys"] != null) && (widget.spec["config"]["mediaKeys"].length > 0))
+        );
   }
 
   @override
@@ -173,8 +136,7 @@ class _ChartComponentState extends State<ChartComponent>
 
           if (this.mounted) {
             loadUp(val, setToState: true);
-            // var applied =  applyLogarithmicScale(gaussianSmoothListMap(scaleDownByDomain((val ))));
-            // loadUp(applied);
+
           }
 
           // try{
@@ -209,8 +171,7 @@ class _ChartComponentState extends State<ChartComponent>
     if (value == 0) {
       return "0";
     }
-    value = exp(value);
-    value -= 1;
+    value = deLogIt(value, bounds["rawMin"]);
     if (value == 0) {
       return "0";
     }
@@ -243,11 +204,19 @@ class _ChartComponentState extends State<ChartComponent>
       return "";
     }
     // value -= 5;
-    if (value <= 0) {
-      return value.floor().toString();
+    // if (value <= 0) {
+    //   return value.floor().toString();
+    // }
+
+    var logIndex =(value == 0 ? 1.0.floor() :  deExpIt(value).floor());
+    if (logIndex > slicedHistory.length - 1) {
+      return "";
     }
 
-    var logValue = deExpIt(value);
+    var logValue= slicedHistory[logIndex][widget.xAxis] ?? slicedHistory[logIndex]["_runtime"];
+    if (logValue == null) {
+      return "";
+    }
     return logValue.floor().toString();
   }
 
@@ -268,8 +237,7 @@ class _ChartComponentState extends State<ChartComponent>
     for (var (i, row) in slicedHistory.indexed) {
       for (var metric in sortedAndDeuplicatedKeys) {
         if (row[metric] is num) {
-          var rowMetric = expNonNull(row[metric]) ??
-              expNonNull(getLastAvailableValue(slicedHistory, i, metric));
+          var rowMetric = row[metric] ?? getLastAvailableValue(slicedHistory, i, metric);
           maxValue = max(maxValue, rowMetric ?? maxValue);
           minValue = min(minValue, rowMetric ?? minValue);
         }
@@ -290,50 +258,29 @@ class _ChartComponentState extends State<ChartComponent>
     // }
 
     //
-    minValue = max(minValue, 0);
+    //minValue = max(minValue, 0);
 
+
+    //minValue = max(0, minValue- (maxValue-minValue)*0.1);
+    //maxValue += ((maxValue-minValue)*0.1);
     //if both maxValue and minValue are 0, make maxValue 1 and minValue 0
     // if((maxValue == 0) && (minValue == 0)){
     //   maxValue = 1.0;
     //   minValue = 0.0;
     // }
 
-    var logarithmicMinValue = log((minValue) + 1);
-    var logarithmicMaxValue = log((maxValue) + 1);
-    return {"max": logarithmicMaxValue, "min": logarithmicMinValue};
+    var logarithmicMinValue = logIt((minValue),minValue );
+    var logarithmicMaxValue = logIt((maxValue),minValue);
+    return {"max": logarithmicMaxValue, "min": logarithmicMinValue, "rawMin": minValue};
   }
 
   Map<String, num> _findDomainAxisBoundsWithMargin(
       List<dynamic> slicedHistory) {
-    num maxValue = 0;
-    num minValue = double.infinity;
 
-    for (var row in slicedHistory) {
-      var value = row[widget.xAxis] ??
-          row["_runtime"]; // Replace with the actual logic to get the X-axis value from row
-      value = (deExpIt(value));
-      maxValue = max(maxValue, value);
-      minValue = min(minValue, value);
-    }
 
-    if (minValue > maxValue) {
-      minValue = 0;
-    }
-
-    if ((maxValue == 0) && (minValue == 0)) {
-      maxValue = 1.0;
-      minValue = 0.0;
-    }
-
-    // num range = maxValue - minValue;
-    // num margin =log( range * 0.1); // 10% margin
-    // maxValue += margin;
-    //minValue -= 10;
-    // minValue = max(minValue, 0);
-
-    var exponentialMinValue = expIt(minValue); //+ (slicedHistory.length);
+    var exponentialMinValue = expIt(1); //+ (slicedHistory.length);
     var exponentialMaxValue =
-        expIt(maxValue); //+ (slicedHistory.length) ; ///+ (maxValue/4);
+        expIt(slicedHistory.length+1); //+ (slicedHistory.length) ; ///+ (maxValue/4);
 
     return {"max": exponentialMaxValue, "min": exponentialMinValue};
   }
@@ -353,57 +300,9 @@ class _ChartComponentState extends State<ChartComponent>
     return null;
   }
 
-  List<num> gaussianSmoothList(List<num> originalList) {
-    //return originalList;
-    return applyGaussianSmoothing(
-            originalList.map((el) => Point(el, el)).toList())
-        .map((e) => e.y)
-        .toList();
-  }
 
-  List<Map<String, dynamic>> gaussianSmoothListMap(List originalList) {
-    //return originalList;
-    var outcome = <String, dynamic>{};
-    var sortedAndDeuplicatedKeys = widget.spec["config"]["metrics"]
-        .toSet()
-        .toList()
-        .map((metric) => metric.replaceAll("system/", "system."));
-    for (var metric in sortedAndDeuplicatedKeys) {
-      var resList = originalList.indexed
-          .map((v) => (v.$2[metric] ??
-              getLastAvailableValue(originalList, v.$1, metric)))
-          .toList();
-      var hasAnyValue = resList.any((element) => element != null);
-      if (hasAnyValue) {
-        var headNullCount =
-            resList.takeWhile((element) => element == null).length;
-        var tailNullCount =
-            resList.reversed.takeWhile((element) => element == null).length;
-        var nresList = resList
-            .sublist(headNullCount, resList.length - tailNullCount)
-            .map<num>((e) => e as num)
-            .toList();
-        var smoothed = gaussianSmoothList(nresList);
-        var smoothedHead = List.filled(headNullCount, null);
-        var smoothedTail = List.filled(tailNullCount, null);
-        var merged = [...smoothedHead, ...smoothed, ...smoothedTail];
-        outcome[metric] = merged;
-      } else {
-        outcome[metric] = resList;
-      }
-    }
 
-    var newList = <Map<String, dynamic>>[];
-    for (var v in originalList.indexed) {
-      var (i, row) = v;
-      var newRow = Map<String, dynamic>.from(row);
-      for (var metric in sortedAndDeuplicatedKeys) {
-        newRow[metric] = outcome[metric][i];
-      }
-      newList.add(newRow);
-    }
-    return newList;
-  }
+
 
   (bool, List<charts.Series<dynamic, num>>) _createSeriesList(
       List slicedHistory) {
@@ -428,12 +327,20 @@ class _ChartComponentState extends State<ChartComponent>
         colorFn: (_, __) => _getColorForMetric(metric),
         // Implement this method
         domainFn: (dynamic row, currentIndex) {
-          return (row[widget.xAxis] ??
-              row["_runtime"]); // ?? getLastAvailableValue(slicedHistory, currentIndex!,widget.xAxis ) ?? getLastAvailableValue(slicedHistory, currentIndex!,"_runtime"));
+         // print("currentIndex= $currentIndex");
+          return expIt(currentIndex!+1);
+         // return expIt(row[widget.xAxis] ?? row["_runtime"]); // ?? getLastAvailableValue(slicedHistory, currentIndex!,widget.xAxis ) ?? getLastAvailableValue(slicedHistory, currentIndex!,"_runtime"));
         },
         // Assuming xAxis is correctly set
-        measureFn: (dynamic row, currentIndex) => (row[metric] ??
-            getLastAvailableValue(slicedHistory, currentIndex!, metric)),
+        measureFn: (dynamic row, currentIndex){
+          var vx = (row[metric] ??
+              getLastAvailableValue(slicedHistory, currentIndex!, metric));
+          if(vx == null){
+            return null;
+          }else{
+            return logIt(vx, bounds["rawMin"] ?? 0.0);
+          }
+        },
         // Ensure 'metric' is a key in your data
         dashPatternFn: slicedHistory!.isNotEmpty
             ? (dynamic row, currentIndex) =>
@@ -500,7 +407,7 @@ class _ChartComponentState extends State<ChartComponent>
       var isLastSeenAnnotable = false;
       var expedLastSeenDomain = lastSeenDomain!;
       var smallestStep = slicedHistory.reversed.where((element) {
-        var domain = element[widget.xAxis] ?? element["_runtime"];
+        var domain = element["_step"] ?? element["_runtime"];
         return expedLastSeenDomain >= domain;
       }).firstOrNull;
       var lastStep = ((slicedHistory
@@ -509,12 +416,19 @@ class _ChartComponentState extends State<ChartComponent>
             ..sort((a, b) => a.compareTo(b)))
           .lastOrNull;
       if (lastStep != null && smallestStep!=null) {
-        var smallestStepDomain = smallestStep[widget.xAxis] ?? smallestStep["_runtime"];
+        var smallestStepDomain = smallestStep["_step"] ?? smallestStep["_runtime"];
         if(lastStep>smallestStepDomain) {
+          var indexOfFirstLargeStepAfterSmallest = slicedHistory.indexWhere((element) {
+            var domain = element["_step"] ?? element["_runtime"];
+            return domain > smallestStepDomain;
+          });
+
+          var smallestStepDomainExp = expIt(indexOfFirstLargeStepAfterSmallest+1);
+          var lastStepExp = expIt(slicedHistory.length+1);
           return [
             new charts.RangeAnnotationSegment(
-                smallestStepDomain,
-                lastStep, //+ ((lastStep - expedLastSeenDomain) * 0.2),
+                smallestStepDomainExp,
+                lastStepExp, //+ ((lastStep - expedLastSeenDomain) * 0.2),
                 charts.RangeAnnotationAxisType.domain,
                 endLabel: 'new',
                 labelStyleSpec: charts.TextStyleSpec(
@@ -522,12 +436,11 @@ class _ChartComponentState extends State<ChartComponent>
                     fontWeight: "800",
                     color: charts.MaterialPalette.pink.shadeDefault),
                 labelAnchor: charts.AnnotationLabelAnchor.end,
+
                 color:
                 charts.Color
-                    .fromHex(code: "#E91E63")
-                    .darker
-                    .darker
-                    .darker,
+                    .fromHex(code: "#231A21")
+                    ,
                 // Override the default vertical direction for domain labels.
                 labelDirection: charts.AnnotationLabelDirection.horizontal),
           ];
@@ -621,7 +534,7 @@ class _ChartComponentState extends State<ChartComponent>
                         color: charts.MaterialPalette.white,
                       ),
                       lineStyle: charts.LineStyleSpec(
-                        color: charts.MaterialPalette.gray.shade800,
+                        color: charts.MaterialPalette.gray.shade900,
                       ),
                     ),
                   ),
@@ -634,7 +547,7 @@ class _ChartComponentState extends State<ChartComponent>
                         xbounds["max"] is num) &&
                         (xbounds["min"] < xbounds["max"]))
                         ? charts.NumericExtents(xbounds["min"]!,
-                        xbounds["max"]! + (xbounds["max"]! * 0.0001))
+                        xbounds["max"]!)
                         : null,
                     tickProviderSpec:
                     const charts.BasicNumericTickProviderSpec(
@@ -651,7 +564,7 @@ class _ChartComponentState extends State<ChartComponent>
                           color: charts.MaterialPalette.white,
                           fontWeight: "500"),
                       lineStyle: charts.LineStyleSpec(
-                        color: charts.MaterialPalette.gray.shade800,
+                        color: charts.MaterialPalette.gray.shade900,
                       ),
                     ),
                     //logScale: spec["config"]["xLogScale"] ?? false,
@@ -665,7 +578,9 @@ class _ChartComponentState extends State<ChartComponent>
                   behaviors: [
                     new charts.RangeAnnotation(
                         [...getRangeAnnotations(slicedHistory)]),
-                    charts.ChartTitle("Step",
+                    charts.ChartTitle(
+                    (widget.xAxis ?? "_step").replaceAll("_", " ").trim().capitalize!
+                    ,
                         titleStyleSpec: const charts.TextStyleSpec(
                             fontSize: 10,
                             fontWeight: "bold",
@@ -732,14 +647,53 @@ class _ChartComponentState extends State<ChartComponent>
 
                       children: [
 
-                        ...widget.spec["config"]["metrics"].toSet()
-                            .toList()
+                        ...((((widget.spec["config"]["metrics"].toSet()
                             .map((metric) => metric.replaceAll("system/", "system."))
-                            .toList()
+                            .toList() as List)
+                            ..add("_step")
+                          ..add("_runtime")
+                          ..add(widget.xAxis)).toSet().toList()
+
+                          ..sort((a,b){
+                            // _step then _runtime should be first
+                            if(a == widget.xAxis){
+                              return -1;
+                            }
+                            if(b == widget.xAxis){
+                              return 1;
+                            }
+                            if(a == "_step" || a == "_runtime" || a == widget.xAxis){
+                              return -1;
+                            }
+
+
+                            if(b == "_step" || a == "_runtime"){
+                              return 1;
+                            }
+
+
+                            return a.compareTo(b);
+                          })
+
+                        )
+                        .where((element) => slicedHistory.lastOrNull?[element] != null)
+                        .toList()
+                         )
                             .take(10)
                             .map((key) {
                           var lastValues = slicedHistory.last;
                           var valNum = lastValues[key];
+                          // if(key == "_step" || key == "_runtime"){
+                          //   valNum = (deExpIt(valNum)).toInt();
+                          // } else if (key != "_timestamp" && valNum != null) {
+                          //   valNum = exp(valNum) - 1;
+                          // }
+                          if(key == "_step" || key == "_runtime" || key == widget.xAxis){
+                            if(valNum != null){
+                              valNum = valNum.toInt();
+                            }
+
+                          }
                           var value = valNum?.toString();
                           if(valNum != null && value != null){
                             if(value.split(".").length > 1){
@@ -757,7 +711,7 @@ class _ChartComponentState extends State<ChartComponent>
                                 color: dartColor,
                                 borderRadius: BorderRadius.circular(6)
                             ),
-                            padding: EdgeInsets.symmetric(vertical: 4, horizontal: 6),
+                            padding: EdgeInsets.symmetric(vertical: 3, horizontal: 4),
                             child: Column(
                               mainAxisAlignment: MainAxisAlignment.start,
                               crossAxisAlignment: CrossAxisAlignment.start,
